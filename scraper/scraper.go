@@ -26,7 +26,7 @@ func CheckForUpdates(dbConn *pg.DB) {
 		}
 
 		if latestUpdate.After(lastUpdate) {
-			if err := parseAndSaveSchedule(dbConn); err != nil {
+			if err := parseAndSaveSchedule(dbConn, latestUpdate); err != nil {
 				log.Printf("Failed to parse and save schedule: %v", err)
 				continue
 			}
@@ -75,7 +75,10 @@ func getLatestScheduleUpdate() (time.Time, error) {
 	}
 
 	for _, url := range urls {
-		c.Visit(url)
+		err = c.Visit(url)
+		if err != nil {
+			log.Printf("Failed to visit %s: %v", url, err)
+		}
 	}
 
 	return latestUpdate, err
@@ -84,12 +87,15 @@ func getLatestScheduleUpdate() (time.Time, error) {
 // extractDate извлекает дату из строки текста.
 func extractDate(text string) string {
 	parts := strings.Split(text, ": ")
-	dateStr := strings.TrimSpace(strings.Split(parts[1], "\n")[0])
-	return dateStr
+	if len(parts) > 1 {
+		dateStr := strings.TrimSpace(strings.Split(parts[1], "\n")[0])
+		return dateStr
+	}
+	return ""
 }
 
 // parseAndSaveSchedule парсит новое расписание и сохраняет его в базу данных.
-func parseAndSaveSchedule(dbConn *pg.DB) error {
+func parseAndSaveSchedule(dbConn *pg.DB, latestUpdate time.Time) error {
 	// Логика парсинга нового расписания.
 	// Например, запрос к API или парсинг веб-страницы.
 
@@ -106,9 +112,9 @@ func parseAndSaveSchedule(dbConn *pg.DB) error {
 		}
 	}
 
-	// Обновляем метаданные с новым временем обновления.
-	metadata := &db.Metadata{LastUpdate: time.Now()}
-	_, err := dbConn.Model(metadata).Insert()
+	// Обновляем метаданные с новейшим временем обновления.
+	metadata := &db.Metadata{LastUpdate: latestUpdate}
+	_, err := dbConn.Model(metadata).OnConflict("(id) DO UPDATE").Set("last_update = EXCLUDED.last_update").Insert()
 	if err != nil {
 		return err
 	}
