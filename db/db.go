@@ -71,6 +71,22 @@ func createSchema(db *pg.DB) error {
 			return fmt.Errorf("failed to create table for model %T: %w", model, err)
 		}
 	}
+
+	var count int
+	_, err := db.QueryOne(pg.Scan(&count), `SELECT COUNT(*) FROM metadata`)
+	if err != nil {
+		return fmt.Errorf("failed to query metadata count: %w", err)
+	}
+
+	if count == 0 {
+		initialMetadata := &Metadata{LastUpdate: time.Unix(0, 0).UTC()}
+
+		_, err := db.Model(initialMetadata).Insert()
+		if err != nil {
+			return fmt.Errorf("failed to insert initial metadata: %w", err)
+		}
+	}
+
 	return nil
 }
 

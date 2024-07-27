@@ -20,7 +20,7 @@ func main() {
 	}
 	defer dbConn.Close()
 
-	if err := scraper.InitScraper(dbConn); err != nil {
-		log.Fatalf("Failed to initialize scraper: %v", err)
-	}
+	go scraper.CheckForUpdates(dbConn)
+
+	select {}
 }
