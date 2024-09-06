@@ -5,6 +5,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Ah3ron/schedule-bot/db"
@@ -77,58 +78,134 @@ func fetchGroups(content string) ([]string, error) {
 	return groups, nil
 }
 
+func parseScheduleForGroup(group string) {
+	fmt.Printf("Parsing schedule for group: %s\n", group)
+
+	links := []string{
+		"https://www.polessu.by/ruz/?q=&f=1",
+		"https://www.polessu.by/ruz/?q=&f=2",
+		"https://www.polessu.by/ruz/term2/?q=&f=1",
+		"https://www.polessu.by/ruz/term2/?q=&f=2",
+	}
+
+	for _, link := range links {
+		link = link + "&q=" + group
+		weekStartDates := parseWeekStartDates(link)
+
+		for weekID, startDate := range weekStartDates {
+			fmt.Printf("Week %s: %s\n", weekID, startDate)
+		}
+	}
+}
+
+func parseWeekStartDates(link string) map[string]time.Time {
+	c := colly.NewCollector()
+
+	weekStartDates := make(map[string]time.Time)
+	var wg sync.WaitGroup
+
+	c.OnHTML("ul#weeks-menu li a", func(e *colly.HTMLElement) {
+		wg.Add(1)
+		defer wg.Done()
+
+		weekID := strings.TrimPrefix(e.Attr("href"), "#")
+		if weekID == "" {
+			return
+		}
+
+		re := regexp.MustCompile(`\d{2}\.\d{2}`)
+		match := re.FindString(e.Text)
+
+		startDateStr := match + fmt.Sprintf(".%d", time.Now().Year())
+		startDate, err := time.Parse("02.01.2006", startDateStr)
+		if err != nil {
+			log.Fatalf("Error parsing date for week %s: %v\n", weekID, err)
+			return
+		}
+
+		weekStartDates[weekID] = startDate
+	})
+
+	c.Visit(link)
+
+	wg.Wait()
+
+	return weekStartDates
+}
+
 func Start(dbConn *pg.DB) {
 	c := colly.NewCollector()
 
+	var groups []string
 	var latestUpdate time.Time
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 
 	c.OnHTML("html", func(e *colly.HTMLElement) {
+		defer wg.Done()
+
 		mainPageContent, err := e.DOM.Html()
 		if err != nil {
 			log.Fatalf("Error getting main page content: %v", err)
 		}
 
-		if e.Request.URL.String() == "https://www.polessu.by/ruz/?q=&f=1" {
-			// groups, err := fetchGroups(mainPageContent)
-			// if err != nil {
-			// 	log.Fatalf("Error fetching groups: %v", err)
-			// }
-
-			// for _, group := range groups {
-			// 	fmt.Println(group)
-			// }
-		}
-
 		lastUpdateDateFromWeb, err := fetchLastUpdateDateFromWeb(mainPageContent)
 		if err != nil {
-			log.Fatalf("Error fetching last update date from web: %v", err)
+			log.Printf("Error fetching last update date from web: %v", err)
+			return
 		}
 
+		mu.Lock()
 		if lastUpdateDateFromWeb.After(latestUpdate) {
 			latestUpdate = lastUpdateDateFromWeb
+		}
+		mu.Unlock()
+
+		if e.Request.URL.String() == "https://www.polessu.by/ruz/?q=&f=1" {
+			groups, err = fetchGroups(mainPageContent)
+			if err != nil {
+				log.Printf("Error fetching groups: %v", err)
+				return
+			}
 		}
 	})
 
 	c.OnError(func(r *colly.Response, err error) {
-		log.Fatalf("Request failed: %v", err)
+		log.Printf("Request failed: %v", err)
 	})
 
 	links := []string{
 		"https://www.polessu.by/ruz/?q=&f=1",
 		"https://www.polessu.by/ruz/?q=&f=2",
-		"https://www.polessu.by/ruz/term2/?q=&f=2",
+		"https://www.polessu.by/ruz/term2/?q=&f=1",
 		"https://www.polessu.by/ruz/term2/?q=&f=2",
 	}
 
 	for _, link := range links {
+		wg.Add(1)
+		log.Printf("Visiting link: %s", link)
 		c.Visit(link)
 	}
+
+	wg.Wait()
 
 	lastUpdateDateFromDB, err := fetchLastUpdateDateFromDB(dbConn)
 	if err != nil {
 		log.Fatalf("Error fetching last update date from database: %v", err)
 	}
 
-	log.Println("Date db: ", lastUpdateDateFromDB)
+	log.Println("Date from DB: ", lastUpdateDateFromDB)
 	log.Println("Latest date from web: ", latestUpdate)
+
+	if latestUpdate.After(lastUpdateDateFromDB) {
+		var wg2 sync.WaitGroup
+		for _, group := range groups {
+			wg2.Add(1)
+			go func(g string) {
+				defer wg2.Done()
+				parseScheduleForGroup(g)
+			}(group)
+		}
+		wg2.Wait()
+	}
 }
