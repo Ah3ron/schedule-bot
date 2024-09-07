@@ -133,6 +133,7 @@ func parseScheduleForGroup(group string) {
 				startDate, ok := weekStartDates[weekNumber]
 				if !ok {
 					fmt.Printf("No start date for week: %s\n", weekNumber)
+					fmt.Println(group)
 					return
 				}
 
@@ -147,7 +148,7 @@ func parseScheduleForGroup(group string) {
 
 				schedule := Schedule{
 					GroupName:  group,
-					LessonDate: classDate.Format("02-01-2006"),
+					LessonDate: classDate.Format("02.01"),
 					DayOfWeek:  currentDay,
 					LessonTime: timeRange,
 					LessonName: subjectInfo,
@@ -166,10 +167,17 @@ func parseScheduleForGroup(group string) {
 	}
 }
 
-func saveSchedulesToDB(dbConn *pg.DB) error {
-	_, err := dbConn.Model(&allSchedules).Insert()
-	if err != nil {
+func saveSchedulesToDB(dbConn *pg.DB, lastUpdate time.Time) error {
+	if _, err := dbConn.Model((*db.Schedule)(nil)).Where("TRUE").Delete(); err != nil {
+		return fmt.Errorf("failed to delete schedules from database: %w", err)
+	}
+
+	if _, err := dbConn.Model(&allSchedules).Insert(); err != nil {
 		return fmt.Errorf("failed to save schedules to database: %w", err)
+	}
+
+	if _, err := dbConn.Model(&db.Metadata{LastUpdate: lastUpdate}).Insert(); err != nil {
+		return fmt.Errorf("failed to save metadata to database: %w", err)
 	}
 	return nil
 }
@@ -302,7 +310,7 @@ func Start(dbConn *pg.DB) {
 		}
 		wg2.Wait()
 
-		if err := saveSchedulesToDB(dbConn); err != nil {
+		if err := saveSchedulesToDB(dbConn, latestUpdate); err != nil {
 			log.Fatalf("Error saving schedules to database: %v", err)
 		}
 
