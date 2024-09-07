@@ -13,63 +13,68 @@ import (
 	"gopkg.in/telebot.v3"
 )
 
-func mainMenuButtons() *telebot.ReplyMarkup {
-	mainMenu := &telebot.ReplyMarkup{}
-	btnSchedule := mainMenu.Data("📆 Расписание", "schedule")
-	btnSettings := mainMenu.Data("⚙️ Настройки", "settings")
-	btnInformation := mainMenu.Data("ℹ️ Информация", "information")
+func createButton(text, unique string) []telebot.Btn {
+	return []telebot.Btn{
+		{Text: text, Unique: unique},
+	}
+}
 
-	mainMenu.Inline(
-		mainMenu.Row(btnSchedule),
-		mainMenu.Row(btnSettings),
-		mainMenu.Row(btnInformation),
+func createMenu(buttonsInRow int, buttonGroups ...[]telebot.Btn) *telebot.ReplyMarkup {
+	menu := &telebot.ReplyMarkup{}
+	var allButtons []telebot.Btn
+
+	for _, group := range buttonGroups {
+		allButtons = append(allButtons, group...)
+	}
+
+	var rows []telebot.Row
+	for i := 0; i < len(allButtons); i += buttonsInRow {
+		end := i + buttonsInRow
+		if end > len(allButtons) {
+			end = len(allButtons)
+		}
+		row := allButtons[i:end]
+		rows = append(rows, menu.Row(row...))
+	}
+
+	menu.Inline(rows...)
+	return menu
+}
+
+func mainMenuButtons() *telebot.ReplyMarkup {
+	return createMenu(1,
+		createButton("📆 Расписание", "schedule"),
+		createButton("⚙️ Настройки", "settings"),
+		createButton("ℹ️ Информация", "information"),
 	)
-	return mainMenu
 }
 
 func scheduleMenuButtons() *telebot.ReplyMarkup {
-	scheduleMenu := &telebot.ReplyMarkup{}
-	btnScheduleNow := scheduleMenu.Data("📆 Сейчас", "now")
-	btnBack := scheduleMenu.Data("⬅️ Назад", "back")
-
-	scheduleMenu.Inline(
-		scheduleMenu.Row(btnScheduleNow),
-		scheduleMenu.Row(btnBack),
+	return createMenu(1,
+		createButton("📆 Сейчас", "now"),
+		createButton("⬅️ Назад", "back"),
 	)
-	return scheduleMenu
 }
 
 func settingsMenuButtons() *telebot.ReplyMarkup {
-	settingsMenu := &telebot.ReplyMarkup{}
-	btnChooseGroup := settingsMenu.Data("🔄 Выбрать группу", "choose_group")
-	btnBack := settingsMenu.Data("⬅️ Назад", "back")
-
-	settingsMenu.Inline(
-		settingsMenu.Row(btnChooseGroup),
-		settingsMenu.Row(btnBack),
+	return createMenu(1,
+		createButton("🔄 Выбрать группу", "choose_group"),
+		createButton("⬅️ Назад", "back"),
 	)
-	return settingsMenu
 }
 
 func backMenuButtons() *telebot.ReplyMarkup {
-	backMenu := &telebot.ReplyMarkup{}
-	btnBack := backMenu.Data("⬅️ Назад", "back")
-
-	backMenu.Inline(
-		backMenu.Row(btnBack),
+	return createMenu(1,
+		createButton("⬅️ Назад", "back"),
 	)
-	return backMenu
 }
 
 func termsOfServiceButtons() *telebot.ReplyMarkup {
-	termsMenu := &telebot.ReplyMarkup{}
-	btnAccept := termsMenu.Data("Принять", "accept_terms")
-	btnDecline := termsMenu.Data("Отказаться", "decline_terms")
-
-	termsMenu.Inline(
-		termsMenu.Row(btnAccept, btnDecline),
+	return createMenu(
+		2,
+		createButton("Принять", "accept_terms"),
+		createButton("Отказаться", "decline_terms"),
 	)
-	return termsMenu
 }
 
 func getUniqueGroups(dbConn *pg.DB) ([]string, error) {
@@ -282,7 +287,7 @@ func handleCommands(bot *telebot.Bot, dbConn *pg.DB) {
 	})
 }
 
-func StartBot(token string, dbConn *pg.DB) {
+func Start(token string, dbConn *pg.DB) {
 	opts := telebot.Settings{
 		Token: token,
 		Poller: &telebot.LongPoller{

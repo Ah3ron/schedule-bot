@@ -2,7 +2,6 @@ package db
 
 import (
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/go-pg/pg/v10"
@@ -55,7 +54,6 @@ func InitDB(databaseURL string) (*pg.DB, error) {
 		return nil, fmt.Errorf("failed to create schema: %w", err)
 	}
 
-	printTables(db)
 	return db, nil
 }
 
@@ -88,17 +86,4 @@ func createSchema(db *pg.DB) error {
 	}
 
 	return nil
-}
-
-func printTables(db *pg.DB) {
-	var tables []string
-	_, err := db.Query(&tables, `SELECT tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema')`)
-	if err != nil {
-		log.Fatalf("Error fetching table names: %v", err)
-	}
-
-	fmt.Println("Tables in the database:")
-	for _, table := range tables {
-		fmt.Println(table)
-	}
 }

@@ -13,6 +13,23 @@ import (
 	"github.com/gocolly/colly"
 )
 
+// Schedule структура для хранения расписания
+type Schedule struct {
+	ID         int64
+	GroupName  string `pg:",notnull"`
+	LessonDate string `pg:",notnull"`
+	DayOfWeek  string `pg:",notnull"`
+	LessonTime string `pg:",notnull"`
+	LessonName string `pg:",notnull"`
+	Location   string
+	Teacher    string
+	Subgroup   string
+}
+
+// Глобальный слайс для хранения всех расписаний перед сохранением в базу
+var allSchedules []Schedule
+var mu sync.Mutex
+
 func fetchLastUpdateDateFromDB(dbConn *pg.DB) (time.Time, error) {
 	var lastUpdate time.Time
 	err := dbConn.Model((*db.Metadata)(nil)).ColumnExpr("MAX(last_update)").Select(&lastUpdate)
@@ -90,12 +107,89 @@ func parseScheduleForGroup(group string) {
 
 	for _, link := range links {
 		link = link + "&q=" + group
+
+		c := colly.NewCollector()
+
 		weekStartDates := parseWeekStartDates(link)
 
-		for weekID, startDate := range weekStartDates {
-			fmt.Printf("Week %s: %s\n", weekID, startDate)
-		}
+		c.OnHTML("tbody#weeks-filter", func(e *colly.HTMLElement) {
+			currentDay := ""
+
+			e.ForEach("tr", func(_ int, el *colly.HTMLElement) {
+				if el.DOM.HasClass("wa") {
+					currentDay = el.ChildText("th:first-of-type")
+					return
+				}
+
+				weekClass := el.Attr("class")
+				re := regexp.MustCompile(`w\d+`)
+				match := re.FindStringSubmatch(weekClass)
+
+				if len(match) < 1 {
+					return
+				}
+
+				weekNumber := match[0]
+				startDate, ok := weekStartDates[weekNumber]
+				if !ok {
+					fmt.Printf("No start date for week: %s\n", weekNumber)
+					return
+				}
+
+				timeRange := el.ChildText("td:nth-child(1)")
+				subjectInfo := el.ChildText("td:nth-child(2)")
+				room := el.ChildText("td:nth-child(3)")
+				teacher := el.ChildText("td:nth-child(4)")
+				subgroup := el.ChildText("td:nth-child(5) span")
+
+				dayOfWeek := calculateDayOfWeek(currentDay)
+				classDate := startDate.AddDate(0, 0, dayOfWeek-1)
+
+				schedule := Schedule{
+					GroupName:  group,
+					LessonDate: classDate.Format("02-01-2006"),
+					DayOfWeek:  currentDay,
+					LessonTime: timeRange,
+					LessonName: subjectInfo,
+					Location:   room,
+					Teacher:    teacher,
+					Subgroup:   subgroup,
+				}
+
+				mu.Lock()
+				allSchedules = append(allSchedules, schedule)
+				mu.Unlock()
+			})
+		})
+
+		c.Visit(link)
 	}
+}
+
+func saveSchedulesToDB(dbConn *pg.DB) error {
+	_, err := dbConn.Model(&allSchedules).Insert()
+	if err != nil {
+		return fmt.Errorf("failed to save schedules to database: %w", err)
+	}
+	return nil
+}
+
+func calculateDayOfWeek(day string) int {
+	dayMap := map[string]int{
+		"Понедельник": 1,
+		"Вторник":     2,
+		"Среда":       3,
+		"Четверг":     4,
+		"Пятница":     5,
+		"Суббота":     6,
+		"Воскресенье": 7,
+	}
+
+	if val, exists := dayMap[day]; exists {
+		return val
+	}
+
+	return 0
 }
 
 func parseWeekStartDates(link string) map[string]time.Time {
@@ -207,5 +301,11 @@ func Start(dbConn *pg.DB) {
 			}(group)
 		}
 		wg2.Wait()
+
+		if err := saveSchedulesToDB(dbConn); err != nil {
+			log.Fatalf("Error saving schedules to database: %v", err)
+		}
+
+		log.Println("Schedules saved to database.")
 	}
 }
