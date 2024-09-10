@@ -1,11 +1,10 @@
-FROM golang:alpine3.20
-
+FROM golang:1.23.1 AS builder
+ARG CGO_ENABLED=0
 WORKDIR /app
-
 COPY . .
+RUN go build -o schedule-bot .
 
-RUN go mod download
-
-RUN CGO_ENABLED=0 GOOS=linux go build -o /out
-
-CMD ["/out"]
+FROM alpine:latest
+WORKDIR /root/
+COPY --from=builder /app/schedule-bot .
+CMD ["./schedule-bot"]
