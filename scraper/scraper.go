@@ -236,8 +236,23 @@ func parseWeekStartDates(link string) map[string]time.Time {
 }
 
 func Start(dbConn *pg.DB) {
-	c := colly.NewCollector()
+	if err := scrapeAndUpdate(dbConn); err != nil {
+		log.Printf("Error during initial scraping and updating: %v", err)
+	}
 
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if err := scrapeAndUpdate(dbConn); err != nil {
+			log.Printf("Error during scraping and updating: %v", err)
+		}
+	}
+
+}
+
+func scrapeAndUpdate(dbConn *pg.DB) error {
+	c := colly.NewCollector()
 	var groups []string
 	var latestUpdate time.Time
 	var mu sync.Mutex
@@ -245,30 +260,8 @@ func Start(dbConn *pg.DB) {
 
 	c.OnHTML("html", func(e *colly.HTMLElement) {
 		defer wg.Done()
-
-		mainPageContent, err := e.DOM.Html()
-		if err != nil {
-			log.Fatalf("Error getting main page content: %v", err)
-		}
-
-		lastUpdateDateFromWeb, err := fetchLastUpdateDateFromWeb(mainPageContent)
-		if err != nil {
-			log.Printf("Error fetching last update date from web: %v", err)
-			return
-		}
-
-		mu.Lock()
-		if lastUpdateDateFromWeb.After(latestUpdate) {
-			latestUpdate = lastUpdateDateFromWeb
-		}
-		mu.Unlock()
-
-		if e.Request.URL.String() == "https://www.polessu.by/ruz/?q=&f=1" {
-			groups, err = fetchGroups(mainPageContent)
-			if err != nil {
-				log.Printf("Error fetching groups: %v", err)
-				return
-			}
+		if err := processHTML(e, &latestUpdate, &groups, &mu); err != nil {
+			log.Printf("Error processing HTML: %v", err)
 		}
 	})
 
@@ -291,29 +284,63 @@ func Start(dbConn *pg.DB) {
 
 	wg.Wait()
 
+	return updateDatabaseIfNeeded(dbConn, latestUpdate, groups)
+}
+
+func processHTML(e *colly.HTMLElement, latestUpdate *time.Time, groups *[]string, mu *sync.Mutex) error {
+	mainPageContent, err := e.DOM.Html()
+	if err != nil {
+		return err
+	}
+
+	lastUpdateDateFromWeb, err := fetchLastUpdateDateFromWeb(mainPageContent)
+	if err != nil {
+		return err
+	}
+
+	mu.Lock()
+	if lastUpdateDateFromWeb.After(*latestUpdate) {
+		*latestUpdate = lastUpdateDateFromWeb
+	}
+	mu.Unlock()
+
+	if e.Request.URL.String() == "https://www.polessu.by/ruz/?q=&f=1" {
+		fetchedGroups, err := fetchGroups(mainPageContent)
+		if err != nil {
+			return err
+		}
+		*groups = fetchedGroups
+	}
+
+	return nil
+}
+
+func updateDatabaseIfNeeded(dbConn *pg.DB, latestUpdate time.Time, groups []string) error {
 	lastUpdateDateFromDB, err := fetchLastUpdateDateFromDB(dbConn)
 	if err != nil {
-		log.Fatalf("Error fetching last update date from database: %v", err)
+		return err
 	}
 
 	log.Println("Date from DB: ", lastUpdateDateFromDB)
 	log.Println("Latest date from web: ", latestUpdate)
 
 	if latestUpdate.After(lastUpdateDateFromDB) {
-		var wg2 sync.WaitGroup
+		var wg sync.WaitGroup
 		for _, group := range groups {
-			wg2.Add(1)
+			wg.Add(1)
 			go func(g string) {
-				defer wg2.Done()
+				defer wg.Done()
 				parseScheduleForGroup(g)
 			}(group)
 		}
-		wg2.Wait()
+		wg.Wait()
 
 		if err := saveSchedulesToDB(dbConn, latestUpdate); err != nil {
-			log.Fatalf("Error saving schedules to database: %v", err)
+			return err
 		}
 
 		log.Println("Schedules saved to database.")
 	}
+
+	return nil
 }

@@ -13,9 +13,9 @@ import (
 	"gopkg.in/telebot.v3"
 )
 
-func createButton(text, unique string) []telebot.Btn {
+func createButton(text, unique, data string) []telebot.Btn {
 	return []telebot.Btn{
-		{Text: text, Unique: unique},
+		{Text: text, Unique: unique, Data: data},
 	}
 }
 
@@ -43,37 +43,46 @@ func createMenu(buttonsInRow int, buttonGroups ...[]telebot.Btn) *telebot.ReplyM
 
 func mainMenuButtons() *telebot.ReplyMarkup {
 	return createMenu(1,
-		createButton("📆 Расписание", "schedule"),
-		createButton("⚙️ Настройки", "settings"),
-		createButton("ℹ️ Информация", "information"),
+		createButton("📆 Расписание", "schedule", ""),
+		createButton("⚙️ Настройки", "settings", ""),
+		createButton("ℹ️ Информация", "information", ""),
 	)
 }
 
 func scheduleMenuButtons() *telebot.ReplyMarkup {
 	return createMenu(1,
-		createButton("📆 Сейчас", "now"),
-		createButton("⬅️ Назад", "back"),
+		createButton("📆 Сейчас", "now", ""),
+		createButton("⬅️ Назад", "back", ""),
+	)
+}
+
+func scheduleNowMenuButtons(currentDay time.Time) *telebot.ReplyMarkup {
+	return createMenu(3,
+		createButton(" < ", "now", currentDay.AddDate(0, 0, -1).Format("02.01")),
+		createButton(" Сегодня ", "now", ""),
+		createButton(" > ", "now", currentDay.AddDate(0, 0, 1).Format("02.01")),
+		createButton("⬅️ Назад", "back", ""),
 	)
 }
 
 func settingsMenuButtons() *telebot.ReplyMarkup {
 	return createMenu(1,
-		createButton("🔄 Выбрать группу", "choose_group"),
-		createButton("⬅️ Назад", "back"),
+		createButton("🔄 Выбрать группу", "choose_group", ""),
+		createButton("⬅️ Назад", "back", ""),
 	)
 }
 
 func backMenuButtons() *telebot.ReplyMarkup {
 	return createMenu(1,
-		createButton("⬅️ Назад", "back"),
+		createButton("⬅️ Назад", "back", ""),
 	)
 }
 
 func termsOfServiceButtons() *telebot.ReplyMarkup {
 	return createMenu(
 		2,
-		createButton("Принять", "accept_terms"),
-		createButton("Отказаться", "decline_terms"),
+		createButton("Принять", "accept_terms", ""),
+		createButton("Отказаться", "decline_terms", ""),
 	)
 }
 
@@ -113,7 +122,6 @@ func getAdmissionYears(groups []string) []string {
 	return years
 }
 
-// Extract specializations from group names based on the selected year
 func getSpecializations(groups []string, year string) []string {
 	specSet := make(map[string]struct{})
 	for _, group := range groups {
@@ -159,7 +167,7 @@ func handleCommands(bot *telebot.Bot, dbConn *pg.DB) {
 
 	bot.Handle("/start", func(c telebot.Context) error {
 		log.Println("Start command")
-		return c.Send("Пожалуйста, примите условия предоставления услуг, чтобы продолжить.", termsMenu)
+		return c.Send("Пожалуйста, примите условия предоставления услуг, чтобы продолжить", termsMenu)
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "accept_terms"}, func(c telebot.Context) error {
@@ -169,7 +177,7 @@ func handleCommands(bot *telebot.Bot, dbConn *pg.DB) {
 
 	bot.Handle(&telebot.Btn{Unique: "decline_terms"}, func(c telebot.Context) error {
 		log.Println("Terms declined")
-		return c.Edit("Чтобы использовать этого бота, вам необходимо принять условия предоставления услуг.")
+		return c.Edit("Чтобы использовать этого бота, вам необходимо принять условия предоставления услуг")
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "schedule"}, func(c telebot.Context) error {
@@ -179,7 +187,49 @@ func handleCommands(bot *telebot.Bot, dbConn *pg.DB) {
 
 	bot.Handle(&telebot.Btn{Unique: "now"}, func(c telebot.Context) error {
 		log.Println("Schedule now command")
-		return c.Edit("Вот ваше расписание на данный момент:", scheduleMenu)
+
+		userID := c.Sender().ID
+
+		user, err := getUserInfo(dbConn, userID)
+		if user.GroupName == "" || err != nil {
+			return c.Edit("Вы не выбрали группу для просмотра расписания.")
+		}
+
+		var todayStr string
+		var todayTime time.Time
+		if c.Data() == "" {
+			todayStr = time.Now().Format("02.01")
+			todayTime, _ = time.Parse("02.01", todayStr)
+		} else {
+			todayStr = c.Data()
+			todayTime, _ = time.Parse("02.01", todayStr)
+		}
+
+		schedules, err := getSchedule(dbConn, user.GroupName, todayStr)
+		if err != nil || len(schedules) == 0 {
+			return c.Edit("Расписание не найдено", scheduleNowMenuButtons(todayTime))
+		}
+
+		text := fmt.Sprintf("Ваше расписание (%s, %s)\n", schedules[0].DayOfWeek, todayStr)
+
+		for _, schedule := range schedules {
+			text += fmt.Sprintf("\n*Время:* _%s_", schedule.LessonTime)
+			text += fmt.Sprintf("\n*Пара:* _%s_", schedule.LessonName)
+
+			if schedule.Location != "" {
+				text += fmt.Sprintf("\n*Аудит.:* _%s_", schedule.Location)
+			}
+			if schedule.Teacher != "" {
+				text += fmt.Sprintf("\n*Препод.:* _%s_", schedule.Teacher)
+			}
+			if schedule.Subgroup != "" {
+				text += fmt.Sprintf("\n*Подгруппа:* _%s_", schedule.Subgroup)
+			}
+
+			text += "\n"
+		}
+
+		return c.Edit(text, scheduleNowMenuButtons(todayTime))
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "back"}, func(c telebot.Context) error {
@@ -287,11 +337,35 @@ func handleCommands(bot *telebot.Bot, dbConn *pg.DB) {
 	})
 }
 
+func getUserInfo(dbConn *pg.DB, userID int64) (*db.Users, error) {
+	var user db.Users
+	err := dbConn.Model(&db.Users{}).Where("telegram_id = ?", userID).Select(&user)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch user info: %w", err)
+	}
+	return &user, nil
+}
+
+func getSchedule(dbConn *pg.DB, groupName string, day string) ([]db.Schedule, error) {
+	var schedules []db.Schedule
+
+	err := dbConn.Model(&schedules).
+		Where("group_name = ?", groupName).
+		Where("lesson_date = ?", day).
+		Select()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get schedule: %w", err)
+	}
+
+	return schedules, nil
+}
+
 func Start(token string, dbConn *pg.DB) {
 	opts := telebot.Settings{
-		Token: token,
+		Token:     token,
+		ParseMode: "Markdown",
 		Poller: &telebot.LongPoller{
-			Timeout: 10 * time.Second,
+			Timeout: 3 * time.Second,
 			AllowedUpdates: []string{
 				"message",
 				"edited_message",

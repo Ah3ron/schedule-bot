@@ -6,6 +6,7 @@ import (
 
 	"github.com/Ah3ron/schedule-bot/db"
 	"github.com/Ah3ron/schedule-bot/scraper"
+	"github.com/Ah3ron/schedule-bot/telegram_bot"
 )
 
 func main() {
@@ -20,7 +21,8 @@ func main() {
 	}
 	defer dbConn.Close()
 
-	go scraper.CheckForUpdates(dbConn)
+	go scraper.Start(dbConn)
+	go telegram_bot.Start(os.Getenv("TELEGRAM_TOKEN"), dbConn)
 
 	select {}
 }
