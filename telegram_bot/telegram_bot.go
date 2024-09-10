@@ -58,13 +58,16 @@ func scheduleMenuButtons() *telebot.ReplyMarkup {
 }
 
 func scheduleNowMenuButtons(currentDay time.Time) *telebot.ReplyMarkup {
-	weekday := currentDay.Weekday()
-	daysUntilMonday := (int(time.Monday) - int(weekday) + 7) % 7
-	if daysUntilMonday == 0 {
-		daysUntilMonday = 7
+	var currentMonday time.Time
+	if currentDay.Weekday() == time.Monday {
+		currentMonday = currentDay
+	} else {
+		daysSinceMonday := int(currentDay.Weekday())
+		currentMonday = currentDay.AddDate(0, 0, -daysSinceMonday)
 	}
-	previousMonday := currentDay.AddDate(0, 0, -daysUntilMonday)
-	nextMonday := previousMonday.AddDate(0, 0, 7)
+
+	previousMonday := currentMonday.AddDate(0, 0, -7)
+	nextMonday := currentMonday.AddDate(0, 0, 7)
 
 	return createMenu(5,
 		createButton(" << ", "now", previousMonday.Format("02.01")),
