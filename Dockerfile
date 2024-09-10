@@ -1,11 +1,10 @@
-FROM golang:alpine3.20
-
+FROM golang:1.23.1 as builder
+ENV TZ=Europe/Moscow
+ARG CGO_ENABLED=0
 WORKDIR /app
-
 COPY . .
+RUN go build
 
-RUN go mod download
-
-RUN CGO_ENABLED=0 GOOS=linux go build -o /out
-
-CMD ["/out"]
+FROM scratch
+COPY --from=builder /app/schedule-bot /schedule-bot
+ENTRYPOINT ["/schedule-bot"]
