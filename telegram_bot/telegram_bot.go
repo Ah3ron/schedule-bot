@@ -58,10 +58,20 @@ func scheduleMenuButtons() *telebot.ReplyMarkup {
 }
 
 func scheduleNowMenuButtons(currentDay time.Time) *telebot.ReplyMarkup {
-	return createMenu(3,
+	weekday := currentDay.Weekday()
+	daysUntilMonday := (int(time.Monday) - int(weekday) + 7) % 7
+	if daysUntilMonday == 0 {
+		daysUntilMonday = 7
+	}
+	previousMonday := currentDay.AddDate(0, 0, -daysUntilMonday)
+	nextMonday := previousMonday.AddDate(0, 0, 7)
+
+	return createMenu(5,
+		createButton(" << ", "now", previousMonday.Format("02.01")),
 		createButton(" < ", "now", currentDay.AddDate(0, 0, -1).Format("02.01")),
-		createButton(" Сегодня ", "now", ""),
+		createButton("Сегодня", "now", ""),
 		createButton(" > ", "now", currentDay.AddDate(0, 0, 1).Format("02.01")),
+		createButton(" >> ", "now", nextMonday.Format("02.01")),
 		createButton("⬅️ Назад", "back", ""),
 	)
 }
@@ -207,24 +217,27 @@ func handleCommands(bot *telebot.Bot, dbConn *pg.DB) {
 
 func handleNowButton(c telebot.Context, dbConn *pg.DB) error {
 	userID := c.Sender().ID
-
 	user, err := getUserInfo(dbConn, userID)
 	if err != nil || user.GroupName == "" {
 		return c.Edit("Вы не выбрали группу для просмотра расписания.")
 	}
 
 	todayStr := c.Data()
+	var todayTime time.Time
 	if todayStr == "" {
-		todayStr = time.Now().Format("02.01")
+		todayTime = time.Now()
+		todayStr = todayTime.Format("02.01")
+	} else {
+		todayTime, _ = time.Parse("02.01", todayStr)
 	}
 
 	schedules, err := getSchedule(dbConn, user.GroupName, todayStr)
 	if err != nil || len(schedules) == 0 {
-		return c.Edit("Расписание не найдено", scheduleNowMenuButtons(time.Now()))
+		return c.Edit("Расписание не найдено", scheduleNowMenuButtons(todayTime))
 	}
 
 	text := formatSchedule(schedules, todayStr)
-	return c.Edit(text, scheduleNowMenuButtons(time.Now()))
+	return c.Edit(text, scheduleNowMenuButtons(todayTime))
 }
 
 func formatSchedule(schedules []db.Schedule, todayStr string) string {
