@@ -28,6 +28,7 @@ func createMenu(buttonsInRow int, buttonGroups ...[]telebot.Btn) *telebot.ReplyM
 	}
 
 	var rows []telebot.Row
+
 	for i := 0; i < len(allButtons); i += buttonsInRow {
 		end := i + buttonsInRow
 		if end > len(allButtons) {
@@ -79,8 +80,7 @@ func backMenuButtons() *telebot.ReplyMarkup {
 }
 
 func termsOfServiceButtons() *telebot.ReplyMarkup {
-	return createMenu(
-		2,
+	return createMenu(2,
 		createButton("Принять", "accept_terms", ""),
 		createButton("Отказаться", "decline_terms", ""),
 	)
@@ -95,7 +95,7 @@ func getUniqueGroups(dbConn *pg.DB) ([]string, error) {
 	return groups, nil
 }
 
-func parseGroupName(group string) (year string, spec string, name string) {
+func parseGroupName(group string) (year, spec, name string) {
 	re := regexp.MustCompile(`^(\d{2})([а-яА-Я]+)-(\d+)[а-я]*$`)
 	matches := re.FindStringSubmatch(group)
 	if len(matches) != 4 {
@@ -107,8 +107,7 @@ func parseGroupName(group string) (year string, spec string, name string) {
 func getAdmissionYears(groups []string) []string {
 	yearSet := make(map[string]struct{})
 	for _, group := range groups {
-		year, _, _ := parseGroupName(group)
-		if year != "" {
+		if year, _, _ := parseGroupName(group); year != "" {
 			yearSet[year] = struct{}{}
 		}
 	}
@@ -125,8 +124,7 @@ func getAdmissionYears(groups []string) []string {
 func getSpecializations(groups []string, year string) []string {
 	specSet := make(map[string]struct{})
 	for _, group := range groups {
-		groupYear, spec, _ := parseGroupName(group)
-		if groupYear == year {
+		if groupYear, spec, _ := parseGroupName(group); groupYear == year {
 			specSet[spec] = struct{}{}
 		}
 	}
@@ -143,8 +141,7 @@ func getSpecializations(groups []string, year string) []string {
 func getGroups(groups []string, year, spec string) []string {
 	groupSet := make(map[string]struct{})
 	for _, group := range groups {
-		groupYear, groupSpec, fullGroup := parseGroupName(group)
-		if groupYear == year && groupSpec == spec {
+		if groupYear, groupSpec, fullGroup := parseGroupName(group); groupYear == year && groupSpec == spec {
 			groupSet[fullGroup] = struct{}{}
 		}
 	}
@@ -159,182 +156,185 @@ func getGroups(groups []string, year, spec string) []string {
 }
 
 func handleCommands(bot *telebot.Bot, dbConn *pg.DB) {
-	mainMenu := mainMenuButtons()
-	scheduleMenu := scheduleMenuButtons()
-	settingsMenu := settingsMenuButtons()
-	informationMenu := backMenuButtons()
-	termsMenu := termsOfServiceButtons()
-
 	bot.Handle("/start", func(c telebot.Context) error {
-		log.Println("Start command")
-		return c.Send("Пожалуйста, примите условия предоставления услуг, чтобы продолжить", termsMenu)
+		return c.Send("Пожалуйста, примите условия предоставления услуг, чтобы продолжить", termsOfServiceButtons())
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "accept_terms"}, func(c telebot.Context) error {
-		log.Println("Terms accepted")
-		return c.Edit("Благодарим вас за принятие условий предоставления услуг. Добро пожаловать в бот!", mainMenu)
+		return c.Edit("Благодарим вас за принятие условий предоставления услуг. Добро пожаловать в бот!", mainMenuButtons())
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "decline_terms"}, func(c telebot.Context) error {
-		log.Println("Terms declined")
 		return c.Edit("Чтобы использовать этого бота, вам необходимо принять условия предоставления услуг")
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "schedule"}, func(c telebot.Context) error {
-		log.Println("Schedule command")
-		return c.Edit("Вот ваше меню расписания:", scheduleMenu)
+		return c.Edit("Вот ваше меню расписания:", scheduleMenuButtons())
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "now"}, func(c telebot.Context) error {
-		log.Println("Schedule now command")
-
-		userID := c.Sender().ID
-
-		user, err := getUserInfo(dbConn, userID)
-		if user.GroupName == "" || err != nil {
-			return c.Edit("Вы не выбрали группу для просмотра расписания.")
-		}
-
-		var todayStr string
-		var todayTime time.Time
-		if c.Data() == "" {
-			todayStr = time.Now().Format("02.01")
-			todayTime, _ = time.Parse("02.01", todayStr)
-		} else {
-			todayStr = c.Data()
-			todayTime, _ = time.Parse("02.01", todayStr)
-		}
-
-		schedules, err := getSchedule(dbConn, user.GroupName, todayStr)
-		if err != nil || len(schedules) == 0 {
-			return c.Edit("Расписание не найдено", scheduleNowMenuButtons(todayTime))
-		}
-
-		text := fmt.Sprintf("Ваше расписание (%s, %s)\n", schedules[0].DayOfWeek, todayStr)
-
-		for _, schedule := range schedules {
-			text += fmt.Sprintf("\n*Время:* _%s_", schedule.LessonTime)
-			text += fmt.Sprintf("\n*Пара:* _%s_", schedule.LessonName)
-
-			if schedule.Location != "" {
-				text += fmt.Sprintf("\n*Аудит.:* _%s_", schedule.Location)
-			}
-			if schedule.Teacher != "" {
-				text += fmt.Sprintf("\n*Препод.:* _%s_", schedule.Teacher)
-			}
-			if schedule.Subgroup != "" {
-				text += fmt.Sprintf("\n*Подгруппа:* _%s_", schedule.Subgroup)
-			}
-
-			text += "\n"
-		}
-
-		return c.Edit(text, scheduleNowMenuButtons(todayTime))
+		return handleNowButton(c, dbConn)
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "back"}, func(c telebot.Context) error {
-		log.Println("Back command")
-		return c.Edit("Вернуться в главное меню:", mainMenu)
+		return c.Edit("Вернуться в главное меню:", mainMenuButtons())
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "settings"}, func(c telebot.Context) error {
-		log.Println("Settings command")
-		return c.Edit("Настройки:", settingsMenu)
+		return c.Edit("Настройки:", settingsMenuButtons())
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "choose_group"}, func(c telebot.Context) error {
-		log.Println("Choose group command")
-
-		uniqueGroups, err := getUniqueGroups(dbConn)
-		if err != nil {
-			return c.Edit(fmt.Sprintf("Ошибка получения групп: %v", err))
-		}
-
-		years := getAdmissionYears(uniqueGroups)
-		yearButtons := &telebot.ReplyMarkup{}
-
-		var yearRows []telebot.Row
-		for _, year := range years {
-			btn := yearButtons.Data(year, "select_year", year)
-			yearRows = append(yearRows, yearButtons.Row(btn))
-		}
-
-		yearButtons.Inline(yearRows...)
-
-		return c.Edit("Выберите год поступления:", yearButtons)
+		return handleChooseGroup(c, dbConn)
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "select_year"}, func(c telebot.Context) error {
-		selectedYear := c.Data()
-		log.Printf("Selected year: %s", selectedYear)
-
-		uniqueGroups, err := getUniqueGroups(dbConn)
-		if err != nil {
-			return c.Edit(fmt.Sprintf("Ошибка получения групп: %v", err))
-		}
-
-		specs := getSpecializations(uniqueGroups, selectedYear)
-		specButtons := &telebot.ReplyMarkup{}
-
-		var specRows []telebot.Row
-		for _, spec := range specs {
-			btn := specButtons.Data(spec, "select_spec", selectedYear+"_"+spec)
-			specRows = append(specRows, specButtons.Row(btn))
-		}
-
-		specButtons.Inline(specRows...)
-
-		return c.Edit("Выберите поток:", specButtons)
+		return handleSelectYear(c, dbConn)
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "select_spec"}, func(c telebot.Context) error {
-		data := strings.Split(c.Data(), "_")
-		selectedYear := data[0]
-		selectedSpec := data[1]
-		log.Printf("Selected spec: %s for year %s", selectedSpec, selectedYear)
-
-		uniqueGroups, err := getUniqueGroups(dbConn)
-		if err != nil {
-			return c.Edit(fmt.Sprintf("Ошибка получения групп: %v", err))
-		}
-
-		groups := getGroups(uniqueGroups, selectedYear, selectedSpec)
-		groupButtons := &telebot.ReplyMarkup{}
-
-		var groupRows []telebot.Row
-		for _, group := range groups {
-			btn := groupButtons.Data(group, "select_group", group)
-			groupRows = append(groupRows, groupButtons.Row(btn))
-		}
-
-		groupButtons.Inline(groupRows...)
-
-		return c.Edit("Выберите группу:", groupButtons)
+		return handleSelectSpec(c, dbConn)
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "select_group"}, func(c telebot.Context) error {
-		selectedGroup := c.Data()
-
-		user := &db.Users{
-			TelegramID: c.Sender().ID,
-			GroupName:  selectedGroup,
-		}
-
-		_, err := dbConn.Model(user).
-			OnConflict("(telegram_id) DO UPDATE").
-			Set("group_name = EXCLUDED.group_name").
-			Insert()
-		if err != nil {
-			return c.Edit(fmt.Sprintf("Ошибка сохранения группы: %v", err))
-		}
-
-		return c.Edit(fmt.Sprintf("Ваша группа была успешно выбрана: %s", selectedGroup), mainMenu)
+		return handleSelectGroup(c, dbConn)
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "information"}, func(c telebot.Context) error {
-		log.Println("Information command")
-		return c.Edit("Информация:", informationMenu)
+		return c.Edit("Информация:", backMenuButtons())
 	})
+}
+
+func handleNowButton(c telebot.Context, dbConn *pg.DB) error {
+	userID := c.Sender().ID
+
+	user, err := getUserInfo(dbConn, userID)
+	if err != nil || user.GroupName == "" {
+		return c.Edit("Вы не выбрали группу для просмотра расписания.")
+	}
+
+	todayStr := c.Data()
+	if todayStr == "" {
+		todayStr = time.Now().Format("02.01")
+	}
+
+	schedules, err := getSchedule(dbConn, user.GroupName, todayStr)
+	if err != nil || len(schedules) == 0 {
+		return c.Edit("Расписание не найдено", scheduleNowMenuButtons(time.Now()))
+	}
+
+	text := formatSchedule(schedules, todayStr)
+	return c.Edit(text, scheduleNowMenuButtons(time.Now()))
+}
+
+func formatSchedule(schedules []db.Schedule, todayStr string) string {
+	text := fmt.Sprintf("Ваше расписание (%s, %s)\n", schedules[0].DayOfWeek, todayStr)
+
+	for _, schedule := range schedules {
+		text += fmt.Sprintf("\n*Время:* _%s_\n*Пара:* _%s_", schedule.LessonTime, schedule.LessonName)
+		if schedule.Location != "" {
+			text += fmt.Sprintf("\n*Аудит.:* _%s_", schedule.Location)
+		}
+		if schedule.Teacher != "" {
+			text += fmt.Sprintf("\n*Препод.:* _%s_", schedule.Teacher)
+		}
+		if schedule.Subgroup != "" {
+			text += fmt.Sprintf("\n*Подгруппа:* _%s_", schedule.Subgroup)
+		}
+		text += "\n"
+	}
+	return text
+}
+
+func handleChooseGroup(c telebot.Context, dbConn *pg.DB) error {
+	uniqueGroups, err := getUniqueGroups(dbConn)
+	if err != nil {
+		return c.Edit(fmt.Sprintf("Ошибка получения групп: %v", err))
+	}
+
+	years := getAdmissionYears(uniqueGroups)
+	yearButtons := createYearButtons(years)
+	return c.Edit("Выберите год поступления:", yearButtons)
+}
+
+func createYearButtons(years []string) *telebot.ReplyMarkup {
+	yearButtons := &telebot.ReplyMarkup{}
+
+	var yearRows []telebot.Row
+	for _, year := range years {
+		btn := yearButtons.Data(year, "select_year", year)
+		yearRows = append(yearRows, yearButtons.Row(btn))
+	}
+	yearButtons.Inline(yearRows...)
+	return yearButtons
+}
+
+func handleSelectYear(c telebot.Context, dbConn *pg.DB) error {
+	selectedYear := c.Data()
+	uniqueGroups, err := getUniqueGroups(dbConn)
+	if err != nil {
+		return c.Edit(fmt.Sprintf("Ошибка получения групп: %v", err))
+	}
+
+	specs := getSpecializations(uniqueGroups, selectedYear)
+	specButtons := createSpecButtons(specs, selectedYear)
+	return c.Edit("Выберите поток:", specButtons)
+}
+
+func createSpecButtons(specs []string, selectedYear string) *telebot.ReplyMarkup {
+	specButtons := &telebot.ReplyMarkup{}
+
+	var specRows []telebot.Row
+	for _, spec := range specs {
+		btn := specButtons.Data(spec, "select_spec", selectedYear+"_"+spec)
+		specRows = append(specRows, specButtons.Row(btn))
+	}
+	specButtons.Inline(specRows...)
+	return specButtons
+}
+
+func handleSelectSpec(c telebot.Context, dbConn *pg.DB) error {
+	data := strings.Split(c.Data(), "_")
+	selectedYear, selectedSpec := data[0], data[1]
+
+	uniqueGroups, err := getUniqueGroups(dbConn)
+	if err != nil {
+		return c.Edit(fmt.Sprintf("Ошибка получения групп: %v", err))
+	}
+
+	groups := getGroups(uniqueGroups, selectedYear, selectedSpec)
+	groupButtons := createGroupButtons(groups)
+	return c.Edit("Выберите группу:", groupButtons)
+}
+
+func createGroupButtons(groups []string) *telebot.ReplyMarkup {
+	groupButtons := &telebot.ReplyMarkup{}
+
+	var groupRows []telebot.Row
+	for _, group := range groups {
+		btn := groupButtons.Data(group, "select_group", group)
+		groupRows = append(groupRows, groupButtons.Row(btn))
+	}
+	groupButtons.Inline(groupRows...)
+	return groupButtons
+}
+
+func handleSelectGroup(c telebot.Context, dbConn *pg.DB) error {
+	selectedGroup := c.Data()
+	user := &db.Users{
+		TelegramID: c.Sender().ID,
+		GroupName:  selectedGroup,
+	}
+
+	_, err := dbConn.Model(user).
+		OnConflict("(telegram_id) DO UPDATE").
+		Set("group_name = EXCLUDED.group_name").
+		Insert()
+	if err != nil {
+		return c.Edit(fmt.Sprintf("Ошибка сохранения группы: %v", err))
+	}
+
+	return c.Edit(fmt.Sprintf("Ваша группа была успешно выбрана: %s", selectedGroup), mainMenuButtons())
 }
 
 func getUserInfo(dbConn *pg.DB, userID int64) (*db.Users, error) {
@@ -348,7 +348,6 @@ func getUserInfo(dbConn *pg.DB, userID int64) (*db.Users, error) {
 
 func getSchedule(dbConn *pg.DB, groupName string, day string) ([]db.Schedule, error) {
 	var schedules []db.Schedule
-
 	err := dbConn.Model(&schedules).
 		Where("group_name = ?", groupName).
 		Where("lesson_date = ?", day).
@@ -356,7 +355,6 @@ func getSchedule(dbConn *pg.DB, groupName string, day string) ([]db.Schedule, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to get schedule: %w", err)
 	}
-
 	return schedules, nil
 }
 
@@ -395,6 +393,5 @@ func Start(token string, dbConn *pg.DB) {
 	}
 
 	handleCommands(bot, dbConn)
-
 	bot.Start()
 }
