@@ -123,17 +123,9 @@ func parseScheduleForGroup(group string) {
 
 				weekClass := el.Attr("class")
 				re := regexp.MustCompile(`w\d+`)
-				match := re.FindStringSubmatch(weekClass)
+				matches := re.FindAllString(weekClass, -1)
 
-				if len(match) < 1 {
-					return
-				}
-
-				weekNumber := match[0]
-				startDate, ok := weekStartDates[weekNumber]
-				if !ok {
-					fmt.Printf("No start date for week: %s\n", weekNumber)
-					fmt.Println(group)
+				if len(matches) < 1 {
 					return
 				}
 
@@ -143,23 +135,36 @@ func parseScheduleForGroup(group string) {
 				teacher := el.ChildText("td:nth-child(4)")
 				subgroup := el.ChildText("td:nth-child(5) span")
 
+				reSubjectInfo := regexp.MustCompile(`\([\d\s,-]+\)\s?`)
+				subjectInfo = reSubjectInfo.ReplaceAllString(subjectInfo, "")
+
 				dayOfWeek := calculateDayOfWeek(currentDay)
-				classDate := startDate.AddDate(0, 0, dayOfWeek-1)
 
-				schedule := Schedule{
-					GroupName:  group,
-					LessonDate: classDate.Format("02.01"),
-					DayOfWeek:  currentDay,
-					LessonTime: timeRange,
-					LessonName: subjectInfo,
-					Location:   room,
-					Teacher:    teacher,
-					Subgroup:   subgroup,
+				for _, weekNumber := range matches {
+					startDate, ok := weekStartDates[weekNumber]
+					if !ok {
+						fmt.Printf("No start date for week: %s\n", weekNumber)
+						fmt.Println(group)
+						continue
+					}
+
+					classDate := startDate.AddDate(0, 0, dayOfWeek-1)
+
+					schedule := Schedule{
+						GroupName:  group,
+						LessonDate: classDate.Format("02.01"),
+						DayOfWeek:  currentDay,
+						LessonTime: timeRange,
+						LessonName: subjectInfo,
+						Location:   room,
+						Teacher:    teacher,
+						Subgroup:   subgroup,
+					}
+
+					mu.Lock()
+					allSchedules = append(allSchedules, schedule)
+					mu.Unlock()
 				}
-
-				mu.Lock()
-				allSchedules = append(allSchedules, schedule)
-				mu.Unlock()
 			})
 		})
 
@@ -240,7 +245,7 @@ func Start(dbConn *pg.DB) {
 		log.Printf("Error during initial scraping and updating: %v", err)
 	}
 
-	ticker := time.NewTicker(10 * time.Minute)
+	ticker := time.NewTicker(30 * time.Minute)
 	defer ticker.Stop()
 
 	for range ticker.C {
