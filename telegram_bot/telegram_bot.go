@@ -67,11 +67,11 @@ func scheduleNowMenuButtons(currentDay time.Time) *telebot.ReplyMarkup {
 	nextMonday := currentMonday.AddDate(0, 0, 7)
 
 	return createMenu(5,
-		createButton(" << ", "now", previousMonday.Format("02.01")),
-		createButton(" < ", "now", currentDay.AddDate(0, 0, -1).Format("02.01")),
-		createButton("Сегодня", "now", ""),
-		createButton(" > ", "now", currentDay.AddDate(0, 0, 1).Format("02.01")),
-		createButton(" >> ", "now", nextMonday.Format("02.01")),
+		createButton("<<", "now", previousMonday.Format("02.01")),
+		createButton("<", "now", currentDay.AddDate(0, 0, -1).Format("02.01")),
+		createButton("●", "now", ""),
+		createButton(">", "now", currentDay.AddDate(0, 0, 1).Format("02.01")),
+		createButton(">>", "now", nextMonday.Format("02.01")),
 		createButton("⬅️ Назад", "back", ""),
 	)
 }
@@ -167,7 +167,7 @@ func getGroups(groups []string, year, spec string) []string {
 
 func handleCommands(bot *telebot.Bot, dbConn *pg.DB) {
 	bot.Handle("/start", func(c telebot.Context) error {
-		return c.Send("Пожалуйста, примите условия предоставления услуг, чтобы продолжить", termsOfServiceButtons())
+		return c.Send("*Отказ от ответственности*\n\nИнформация, предоставляемая ботом, носит справочный характер. Мы не несем ответственности за точность, полноту или актуальность данных. Использование информации осуществляется на ваш собственный риск.\n\nНажмите кнопку ниже, чтобы принять правила:", termsOfServiceButtons())
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "accept_terms"}, func(c telebot.Context) error {
@@ -179,7 +179,7 @@ func handleCommands(bot *telebot.Bot, dbConn *pg.DB) {
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "schedule"}, func(c telebot.Context) error {
-		return c.Edit("Вот ваше меню расписания:", scheduleMenuButtons())
+		return c.Edit("Меню расписания:", scheduleMenuButtons())
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "now"}, func(c telebot.Context) error {
@@ -187,7 +187,7 @@ func handleCommands(bot *telebot.Bot, dbConn *pg.DB) {
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "back"}, func(c telebot.Context) error {
-		return c.Edit("Вернуться в главное меню:", mainMenuButtons())
+		return c.Edit("Главное меню:", mainMenuButtons())
 	})
 
 	bot.Handle(&telebot.Btn{Unique: "settings"}, func(c telebot.Context) error {
@@ -271,15 +271,12 @@ func handleChooseGroup(c telebot.Context, dbConn *pg.DB) error {
 }
 
 func createYearButtons(years []string) *telebot.ReplyMarkup {
-	yearButtons := &telebot.ReplyMarkup{}
-
-	var yearRows []telebot.Row
+	var yearButtons [][]telebot.Btn
 	for _, year := range years {
-		btn := yearButtons.Data(year, "select_year", year)
-		yearRows = append(yearRows, yearButtons.Row(btn))
+		btn := createButton(year, "select_year", year)
+		yearButtons = append(yearButtons, btn)
 	}
-	yearButtons.Inline(yearRows...)
-	return yearButtons
+	return createMenu(1, yearButtons...)
 }
 
 func handleSelectYear(c telebot.Context, dbConn *pg.DB) error {
@@ -295,15 +292,12 @@ func handleSelectYear(c telebot.Context, dbConn *pg.DB) error {
 }
 
 func createSpecButtons(specs []string, selectedYear string) *telebot.ReplyMarkup {
-	specButtons := &telebot.ReplyMarkup{}
-
-	var specRows []telebot.Row
+	var specButtons [][]telebot.Btn
 	for _, spec := range specs {
-		btn := specButtons.Data(spec, "select_spec", selectedYear+"_"+spec)
-		specRows = append(specRows, specButtons.Row(btn))
+		btn := createButton(spec, "select_spec", selectedYear+"_"+spec)
+		specButtons = append(specButtons, btn)
 	}
-	specButtons.Inline(specRows...)
-	return specButtons
+	return createMenu(3, specButtons...)
 }
 
 func handleSelectSpec(c telebot.Context, dbConn *pg.DB) error {
@@ -321,15 +315,12 @@ func handleSelectSpec(c telebot.Context, dbConn *pg.DB) error {
 }
 
 func createGroupButtons(groups []string) *telebot.ReplyMarkup {
-	groupButtons := &telebot.ReplyMarkup{}
-
-	var groupRows []telebot.Row
+	var groupButtons [][]telebot.Btn
 	for _, group := range groups {
-		btn := groupButtons.Data(group, "select_group", group)
-		groupRows = append(groupRows, groupButtons.Row(btn))
+		btn := createButton(group, "select_group", group)
+		groupButtons = append(groupButtons, btn)
 	}
-	groupButtons.Inline(groupRows...)
-	return groupButtons
+	return createMenu(1, groupButtons...)
 }
 
 func handleSelectGroup(c telebot.Context, dbConn *pg.DB) error {
