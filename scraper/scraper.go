@@ -344,6 +344,10 @@ func updateDatabaseIfNeeded(dbConn *pg.DB, latestUpdate time.Time, groups []stri
 			return err
 		}
 
+		mu.Lock()
+		allSchedules = []Schedule{}
+		mu.Unlock()
+
 		log.Println("Schedules saved to database.")
 	}
 
