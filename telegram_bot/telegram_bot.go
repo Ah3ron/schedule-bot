@@ -66,11 +66,14 @@ func scheduleNowMenuButtons(currentDay time.Time) *telebot.ReplyMarkup {
 	previousMonday := currentMonday.AddDate(0, 0, -7)
 	nextMonday := currentMonday.AddDate(0, 0, 7)
 
+	previousDay := currentDay.AddDate(0, 0, -1)
+	nextDay := currentDay.AddDate(0, 0, 1)
+
 	return createMenu(5,
 		createButton("<<", "now", previousMonday.Format("02.01")),
-		createButton("<", "now", currentDay.AddDate(0, 0, -1).Format("02.01")),
+		createButton("<", "now", previousDay.Format("02.01")),
 		createButton("●", "now", ""),
-		createButton(">", "now", currentDay.AddDate(0, 0, 1).Format("02.01")),
+		createButton(">", "now", nextDay.Format("02.01")),
 		createButton(">>", "now", nextMonday.Format("02.01")),
 		createButton("⬅️ Назад", "back", ""),
 	)
@@ -233,7 +236,7 @@ func handleNowButton(c telebot.Context, dbConn *pg.DB) error {
 
 	schedules, err := getSchedule(dbConn, user.GroupName, todayStr)
 	if err != nil || len(schedules) == 0 {
-		return c.Edit("Расписание не найдено", scheduleNowMenuButtons(todayTime))
+		return c.Edit(fmt.Sprintf("Расписание не найдено на дату %s", todayStr), scheduleNowMenuButtons(todayTime))
 	}
 
 	text := formatSchedule(schedules, todayStr)
