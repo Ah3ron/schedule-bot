@@ -5,6 +5,10 @@ COPY . .
 RUN go build -o schedule-bot .
 
 FROM alpine:latest
+RUN apk add --no-cache tzdata
+ENV TZ=Europe/Minsk
+RUN cp /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone
 WORKDIR /root/
 COPY --from=builder /app/schedule-bot .
 CMD ["./schedule-bot"]
