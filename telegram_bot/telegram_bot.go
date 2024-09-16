@@ -70,11 +70,11 @@ func scheduleNowMenuButtons(currentDay time.Time) *telebot.ReplyMarkup {
 	nextDay := currentDay.AddDate(0, 0, 1)
 
 	return createMenu(5,
-		createButton("<<", "now", previousMonday.Format("02.01")),
-		createButton("<", "now", previousDay.Format("02.01")),
+		createButton("<<", "now", previousMonday.Format("02.01.2006")),
+		createButton("<", "now", previousDay.Format("02.01.2006")),
 		createButton("●", "now", ""),
-		createButton(">", "now", nextDay.Format("02.01")),
-		createButton(">>", "now", nextMonday.Format("02.01")),
+		createButton(">", "now", nextDay.Format("02.01.2006")),
+		createButton(">>", "now", nextMonday.Format("02.01.2006")),
 		createButton("⬅️ Назад", "back", ""),
 	)
 }
@@ -220,30 +220,42 @@ func handleCommands(bot *telebot.Bot, dbConn *pg.DB) {
 
 func handleNowButton(c telebot.Context, dbConn *pg.DB) error {
 	userID := c.Sender().ID
+
 	user, err := getUserInfo(dbConn, userID)
 	if err != nil || user.GroupName == "" {
 		return c.Edit("Вы не выбрали группу для просмотра расписания.")
 	}
 
-	todayStr := c.Data()
-	var todayTime time.Time
-	if todayStr == "" {
+	todayTime, todayStr, err := parseDate(c.Data())
+	if err != nil {
 		todayTime = time.Now()
-		todayStr = todayTime.Format("02.01")
-	} else {
-		todayTime, _ = time.Parse("02.01", todayStr)
+		todayStr = todayTime.Format("02.01.2006")
 	}
 
-	schedules, err := getSchedule(dbConn, user.GroupName, todayStr)
+	schedules, err := getSchedule(dbConn, user.GroupName, todayTime)
 	if err != nil || len(schedules) == 0 {
 		return c.Edit(fmt.Sprintf("Расписание не найдено на дату %s", todayStr), scheduleNowMenuButtons(todayTime))
 	}
 
-	text := formatSchedule(schedules, todayStr)
+	text := formatSchedule(schedules, todayTime)
 	return c.Edit(text, scheduleNowMenuButtons(todayTime))
 }
 
-func formatSchedule(schedules []db.Schedule, todayStr string) string {
+func parseDate(dateStr string) (time.Time, string, error) {
+	if dateStr == "" {
+		t := time.Now()
+		return t, t.Format("02.01.2006"), nil
+	}
+
+	t, err := time.Parse("02.01.2006", dateStr)
+	if err != nil {
+		return time.Time{}, "", err
+	}
+	return t, dateStr, nil
+}
+
+func formatSchedule(schedules []db.Schedule, todayTime time.Time) string {
+	todayStr := todayTime.Format("02.01")
 	text := fmt.Sprintf("Ваше расписание (%s, %s)\n", schedules[0].DayOfWeek, todayStr)
 
 	for _, schedule := range schedules {
@@ -353,11 +365,14 @@ func getUserInfo(dbConn *pg.DB, userID int64) (*db.Users, error) {
 	return &user, nil
 }
 
-func getSchedule(dbConn *pg.DB, groupName string, day string) ([]db.Schedule, error) {
+func getSchedule(dbConn *pg.DB, groupName string, day time.Time) ([]db.Schedule, error) {
 	var schedules []db.Schedule
+
+	dayStr := day.Format("02.01")
+
 	err := dbConn.Model(&schedules).
 		Where("group_name = ?", groupName).
-		Where("lesson_date = ?", day).
+		Where("lesson_date = ?", dayStr).
 		Select()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get schedule: %w", err)
