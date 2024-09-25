@@ -2,7 +2,6 @@ package telegram_bot
 
 import (
 	"fmt"
-	"log"
 	"math/rand"
 	"regexp"
 	"sort"
@@ -224,7 +223,10 @@ func handleNowButton(c telebot.Context, dbConn *pg.DB) error {
 	userID := c.Sender().ID
 
 	user, err := getUserInfo(dbConn, userID)
-	if err != nil || user.GroupName == "" {
+	if err != nil {
+		return c.Edit("Ошибка получения информации о пользователе.")
+	}
+	if user.GroupName == "" {
 		return c.Edit("Вы не выбрали группу для просмотра расписания.")
 	}
 
@@ -235,7 +237,10 @@ func handleNowButton(c telebot.Context, dbConn *pg.DB) error {
 	}
 
 	schedules, err := getSchedule(dbConn, user.GroupName, todayTime)
-	if err != nil || len(schedules) == 0 {
+	if err != nil {
+		return c.Edit(fmt.Sprintf("Ошибка получения расписания: %v", err))
+	}
+	if len(schedules) == 0 {
 		return c.Edit(fmt.Sprintf("Расписание не найдено на дату %s", todayStr[:5]), scheduleNowMenuButtons(todayTime))
 	}
 
@@ -286,7 +291,7 @@ func parseDate(dateStr string) (time.Time, string, error) {
 
 	t, err := time.Parse("02.01.2006", dateStr)
 	if err != nil {
-		return time.Time{}, "", err
+		return time.Time{}, "", fmt.Errorf("invalid date format: %w", err)
 	}
 	return t, dateStr, nil
 }
@@ -354,6 +359,9 @@ func createSpecButtons(specs []string, selectedYear string) *telebot.ReplyMarkup
 
 func handleSelectSpec(c telebot.Context, dbConn *pg.DB) error {
 	data := strings.Split(c.Data(), "_")
+	if len(data) < 2 {
+		return c.Edit("Ошибка: некорректные данные для специальности.")
+	}
 	selectedYear, selectedSpec := data[0], data[1]
 
 	uniqueGroups, err := getUniqueGroups(dbConn)
@@ -448,7 +456,8 @@ func Start(token string, dbConn *pg.DB) {
 
 	bot, err := telebot.NewBot(opts)
 	if err != nil {
-		log.Fatalf("Failed to create bot: %v", err)
+		fmt.Printf("Failed to create bot: %v\n", err)
+		return
 	}
 
 	handleCommands(bot, dbConn)
