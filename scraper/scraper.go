@@ -2,7 +2,6 @@ package scraper
 
 import (
 	"fmt"
-	"log"
 	"regexp"
 	"strings"
 	"sync"
@@ -13,21 +12,7 @@ import (
 	"github.com/gocolly/colly"
 )
 
-// Schedule структура для хранения расписания
-type Schedule struct {
-	ID         int64
-	GroupName  string `pg:",notnull"`
-	LessonDate string `pg:",notnull"`
-	DayOfWeek  string `pg:",notnull"`
-	LessonTime string `pg:",notnull"`
-	LessonName string `pg:",notnull"`
-	Location   string
-	Teacher    string
-	Subgroup   string
-}
-
-// Глобальный слайс для хранения всех расписаний перед сохранением в базу
-var allSchedules []Schedule
+var allSchedules []db.Schedule
 var mu sync.Mutex
 
 func fetchLastUpdateDateFromDB(dbConn *pg.DB) (time.Time, error) {
@@ -44,7 +29,7 @@ func fetchLastUpdateDateFromWeb(content string) (time.Time, error) {
 	matches := re.FindStringSubmatch(content)
 
 	if len(matches) <= 0 {
-		return time.Time{}, fmt.Errorf("failed to parse date")
+		return time.Time{}, fmt.Errorf("failed to parse date from content")
 	}
 
 	day := matches[1]
@@ -58,8 +43,7 @@ func fetchLastUpdateDateFromWeb(content string) (time.Time, error) {
 	layout := "2006-01-02 15:04"
 	parsedTime, err := time.Parse(layout, dateString)
 	if err != nil {
-		log.Println("Failed to parse time: %w", err)
-		return time.Time{}, err
+		return time.Time{}, fmt.Errorf("failed to parse time: %w", err)
 	}
 
 	return parsedTime, nil
@@ -70,7 +54,7 @@ func fetchGroups(content string) ([]string, error) {
 	matches := re.FindStringSubmatch(content)
 
 	if len(matches) <= 1 {
-		return nil, fmt.Errorf("no matches found")
+		return nil, fmt.Errorf("no matches found for groups")
 	}
 
 	arrayString := matches[1]
@@ -104,6 +88,8 @@ func parseScheduleForGroup(group string) {
 		"https://www.polessu.by/ruz/term2/?q=&f=1",
 		"https://www.polessu.by/ruz/term2/?q=&f=2",
 	}
+
+	count := 0
 
 	for _, link := range links {
 		link = link + "&q=" + group
@@ -150,7 +136,7 @@ func parseScheduleForGroup(group string) {
 
 					classDate := startDate.AddDate(0, 0, dayOfWeek-1)
 
-					schedule := Schedule{
+					schedule := db.Schedule{
 						GroupName:  group,
 						LessonDate: classDate.Format("02.01"),
 						DayOfWeek:  currentDay,
@@ -160,6 +146,7 @@ func parseScheduleForGroup(group string) {
 						Teacher:    teacher,
 						Subgroup:   subgroup,
 					}
+					count++
 
 					mu.Lock()
 					allSchedules = append(allSchedules, schedule)
@@ -168,11 +155,20 @@ func parseScheduleForGroup(group string) {
 			})
 		})
 
-		c.Visit(link)
+		if err := c.Visit(link); err != nil {
+			fmt.Printf("Failed to visit link %s: %v\n", link, err)
+		}
 	}
+
+	fmt.Printf("Total schedules collected from group %s: %d\n", group, count)
 }
 
 func saveSchedulesToDB(dbConn *pg.DB, lastUpdate time.Time) error {
+	if len(allSchedules) == 0 {
+		fmt.Println("No schedules to save to the database.")
+		return nil
+	}
+
 	if _, err := dbConn.Model((*db.Schedule)(nil)).Where("TRUE").Delete(); err != nil {
 		return fmt.Errorf("failed to delete schedules from database: %w", err)
 	}
@@ -226,14 +222,16 @@ func parseWeekStartDates(link string) map[string]time.Time {
 		startDateStr := match + fmt.Sprintf(".%d", time.Now().Year())
 		startDate, err := time.Parse("02.01.2006", startDateStr)
 		if err != nil {
-			log.Fatalf("Error parsing date for week %s: %v\n", weekID, err)
+			fmt.Printf("Error parsing date for week %s: %v\n", weekID, err)
 			return
 		}
 
 		weekStartDates[weekID] = startDate
 	})
 
-	c.Visit(link)
+	if err := c.Visit(link); err != nil {
+		fmt.Printf("Failed to visit link %s: %v\n", link, err)
+	}
 
 	wg.Wait()
 
@@ -242,7 +240,7 @@ func parseWeekStartDates(link string) map[string]time.Time {
 
 func Start(dbConn *pg.DB) {
 	if err := scrapeAndUpdate(dbConn); err != nil {
-		log.Printf("Error during initial scraping and updating: %v", err)
+		fmt.Printf("Error during initial scraping and updating: %v\n", err)
 	}
 
 	ticker := time.NewTicker(30 * time.Minute)
@@ -250,10 +248,9 @@ func Start(dbConn *pg.DB) {
 
 	for range ticker.C {
 		if err := scrapeAndUpdate(dbConn); err != nil {
-			log.Printf("Error during scraping and updating: %v", err)
+			fmt.Printf("Error during scraping and updating: %v\n", err)
 		}
 	}
-
 }
 
 func scrapeAndUpdate(dbConn *pg.DB) error {
@@ -266,12 +263,12 @@ func scrapeAndUpdate(dbConn *pg.DB) error {
 	c.OnHTML("html", func(e *colly.HTMLElement) {
 		defer wg.Done()
 		if err := processHTML(e, &latestUpdate, &groups, &mu); err != nil {
-			log.Printf("Error processing HTML: %v", err)
+			fmt.Printf("Error processing HTML: %v\n", err)
 		}
 	})
 
 	c.OnError(func(r *colly.Response, err error) {
-		log.Printf("Request failed: %v", err)
+		fmt.Printf("Request failed: %v\n", err)
 	})
 
 	links := []string{
@@ -283,8 +280,10 @@ func scrapeAndUpdate(dbConn *pg.DB) error {
 
 	for _, link := range links {
 		wg.Add(1)
-		log.Printf("Visiting link: %s", link)
-		c.Visit(link)
+		fmt.Printf("Visiting link: %s\n", link)
+		if err := c.Visit(link); err != nil {
+			fmt.Printf("Failed to visit link %s: %v\n", link, err)
+		}
 	}
 
 	wg.Wait()
@@ -295,12 +294,12 @@ func scrapeAndUpdate(dbConn *pg.DB) error {
 func processHTML(e *colly.HTMLElement, latestUpdate *time.Time, groups *[]string, mu *sync.Mutex) error {
 	mainPageContent, err := e.DOM.Html()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get HTML content: %w", err)
 	}
 
 	lastUpdateDateFromWeb, err := fetchLastUpdateDateFromWeb(mainPageContent)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to fetch last update date from web: %w", err)
 	}
 
 	mu.Lock()
@@ -312,7 +311,7 @@ func processHTML(e *colly.HTMLElement, latestUpdate *time.Time, groups *[]string
 	if e.Request.URL.String() == "https://www.polessu.by/ruz/?q=&f=1" {
 		fetchedGroups, err := fetchGroups(mainPageContent)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to fetch groups: %w", err)
 		}
 		*groups = fetchedGroups
 	}
@@ -323,11 +322,11 @@ func processHTML(e *colly.HTMLElement, latestUpdate *time.Time, groups *[]string
 func updateDatabaseIfNeeded(dbConn *pg.DB, latestUpdate time.Time, groups []string) error {
 	lastUpdateDateFromDB, err := fetchLastUpdateDateFromDB(dbConn)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to fetch last update date from database: %w", err)
 	}
 
-	log.Println("Date from DB: ", lastUpdateDateFromDB)
-	log.Println("Latest date from web: ", latestUpdate)
+	fmt.Println("Date from DB: ", lastUpdateDateFromDB)
+	fmt.Println("Latest date from web: ", latestUpdate)
 
 	if latestUpdate.After(lastUpdateDateFromDB) {
 		var wg sync.WaitGroup
@@ -341,14 +340,14 @@ func updateDatabaseIfNeeded(dbConn *pg.DB, latestUpdate time.Time, groups []stri
 		wg.Wait()
 
 		if err := saveSchedulesToDB(dbConn, latestUpdate); err != nil {
-			return err
+			return fmt.Errorf("failed to save schedules to database: %w", err)
 		}
 
 		mu.Lock()
-		allSchedules = []Schedule{}
+		allSchedules = []db.Schedule{}
 		mu.Unlock()
 
-		log.Println("Schedules saved to database.")
+		fmt.Println("Schedules saved to database.")
 	}
 
 	return nil
