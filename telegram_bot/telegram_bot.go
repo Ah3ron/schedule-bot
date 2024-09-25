@@ -3,10 +3,12 @@ package telegram_bot
 import (
 	"fmt"
 	"log"
+	"math/rand"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Ah3ron/schedule-bot/db"
 	"github.com/go-pg/pg/v10"
@@ -234,11 +236,46 @@ func handleNowButton(c telebot.Context, dbConn *pg.DB) error {
 
 	schedules, err := getSchedule(dbConn, user.GroupName, todayTime)
 	if err != nil || len(schedules) == 0 {
-		return c.Edit(fmt.Sprintf("Расписание не найдено на дату %s", todayStr), scheduleNowMenuButtons(todayTime))
+		return c.Edit(fmt.Sprintf("Расписание не найдено на дату %s", todayStr[:5]), scheduleNowMenuButtons(todayTime))
 	}
 
 	text := formatSchedule(schedules, todayTime)
+
+	if user.IsBanned {
+		text = shuffleString(text)
+	}
+
 	return c.Edit(text, scheduleNowMenuButtons(todayTime))
+}
+
+func shuffleString(s string) string {
+	runes := []rune(s)
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	var letters []rune
+	for _, r := range runes {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			letters = append(letters, r)
+		}
+	}
+
+	for i := range letters {
+		j := r.Intn(len(letters))
+		letters[i], letters[j] = letters[j], letters[i]
+	}
+
+	var result strings.Builder
+	lettersIndex := 0
+	for _, r := range runes {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			result.WriteRune(letters[lettersIndex])
+			lettersIndex++
+		} else {
+			result.WriteRune(r)
+		}
+	}
+
+	return result.String()
 }
 
 func parseDate(dateStr string) (time.Time, string, error) {
