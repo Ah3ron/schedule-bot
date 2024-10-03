@@ -53,7 +53,8 @@ func mainMenuButtons() *telebot.ReplyMarkup {
 
 func scheduleMenuButtons() *telebot.ReplyMarkup {
 	return createMenu(1,
-		createButton("📆 Сейчас", "now", ""),
+		createButton("📆 На день", "now", ""),
+		createButton("📅 На неделю", "week", ""),
 		createButton("⬅️ Назад", "back", ""),
 	)
 }
@@ -76,6 +77,23 @@ func scheduleNowMenuButtons(currentDay time.Time) *telebot.ReplyMarkup {
 		createButton("●", "now", ""),
 		createButton(">", "now", nextDay.Format("02.01.2006")),
 		createButton(">>", "now", nextMonday.Format("02.01.2006")),
+		createButton("⬅️ Назад", "back", ""),
+	)
+}
+
+func scheduleWeekMenuButtons(currentDay time.Time) *telebot.ReplyMarkup {
+	currentMonday := currentDay
+	for currentMonday.Weekday() != time.Monday {
+		currentMonday = currentMonday.AddDate(0, 0, -1)
+	}
+
+	previousMonday := currentMonday.AddDate(0, 0, -7)
+	nextMonday := currentMonday.AddDate(0, 0, 7)
+
+	return createMenu(3,
+		createButton("<<", "week", previousMonday.Format("02.01.2006")),
+		createButton("●", "week", ""),
+		createButton(">>", "week", nextMonday.Format("02.01.2006")),
 		createButton("⬅️ Назад", "back", ""),
 	)
 }
@@ -190,6 +208,10 @@ func handleCommands(bot *telebot.Bot, dbConn *pg.DB) {
 		return handleNowButton(c, dbConn)
 	})
 
+	bot.Handle(&telebot.Btn{Unique: "week"}, func(c telebot.Context) error {
+		return handleWeekButton(c, dbConn)
+	})
+
 	bot.Handle(&telebot.Btn{Unique: "back"}, func(c telebot.Context) error {
 		return c.Edit("Главное меню:", mainMenuButtons())
 	})
@@ -224,10 +246,7 @@ func handleNowButton(c telebot.Context, dbConn *pg.DB) error {
 
 	user, err := getUserInfo(dbConn, userID)
 	if err != nil {
-		return c.Edit("Ошибка получения информации о пользователе.")
-	}
-	if user.GroupName == "" {
-		return c.Edit("Вы не выбрали группу для просмотра расписания.")
+		return c.Edit("Вы не выбрали группу для просмотра расписания.", backMenuButtons())
 	}
 
 	todayTime, todayStr, err := parseDate(c.Data())
@@ -314,6 +333,86 @@ func formatSchedule(schedules []db.Schedule, todayTime time.Time) string {
 		text += "\n"
 	}
 	return text
+}
+
+func handleWeekButton(c telebot.Context, dbConn *pg.DB) error {
+	userID := c.Sender().ID
+
+	user, err := getUserInfo(dbConn, userID)
+	if err != nil {
+		return c.Edit("Вы не выбрали группу для просмотра расписания.", backMenuButtons())
+	}
+
+	todayTime, _, err := parseDate(c.Data())
+	if err != nil {
+		todayTime = time.Now()
+	}
+
+	currentMonday := todayTime
+	for currentMonday.Weekday() != time.Monday {
+		currentMonday = currentMonday.AddDate(0, 0, -1)
+	}
+
+	var weeklySchedules []db.Schedule
+
+	for i := 0; i < 7; i++ {
+		day := currentMonday.AddDate(0, 0, i)
+		schedules, err := getSchedule(dbConn, user.GroupName, day)
+		if err != nil {
+			return c.Edit(fmt.Sprintf("Ошибка получения расписания: %v", err))
+		}
+		weeklySchedules = append(weeklySchedules, schedules...)
+	}
+
+	if len(weeklySchedules) == 0 {
+		return c.Edit("Расписание не найдено на эту неделю.", scheduleMenuButtons())
+	}
+
+	text := formatWeeklySchedule(weeklySchedules)
+
+	return c.Edit(text, scheduleWeekMenuButtons(currentMonday))
+}
+
+func formatWeeklySchedule(schedules []db.Schedule) string {
+	var text strings.Builder
+	var DayOfWeek string
+
+	for _, schedule := range schedules {
+		if DayOfWeek != schedule.DayOfWeek {
+			DayOfWeek = schedule.DayOfWeek
+			text.WriteString("\n")
+			text.WriteString(fmt.Sprintf("*%s* (%s):\n\n", DayOfWeek, schedule.LessonDate))
+		}
+
+		timeParts := strings.Split(schedule.LessonTime, "-")
+		if len(timeParts) > 0 {
+			schedule.LessonTime = strings.TrimSpace(timeParts[0])
+		}
+
+		text.WriteString(fmt.Sprintf("*%s*: _%s_", schedule.LessonTime, schedule.LessonName))
+		if schedule.Location != "" {
+			text.WriteString(fmt.Sprintf("; _%s_", schedule.Location))
+		}
+		if schedule.Teacher != "" {
+			text.WriteString(fmt.Sprintf("; _%s_", formatTeacherName(schedule.Teacher)))
+		}
+		if schedule.Subgroup != "" {
+			text.WriteString(fmt.Sprintf(" (_%s_)", schedule.Subgroup))
+		}
+		text.WriteString("\n")
+	}
+
+	return text.String()
+}
+
+func formatTeacherName(fullName string) string {
+	parts := strings.Fields(strings.TrimSpace(fullName))
+
+	if len(parts) < 3 {
+		return fullName
+	}
+
+	return fmt.Sprintf("%s %c. %c.", parts[0], []rune(parts[1])[0], []rune(parts[2])[0])
 }
 
 func handleChooseGroup(c telebot.Context, dbConn *pg.DB) error {
@@ -433,23 +532,9 @@ func Start(token string, dbConn *pg.DB) {
 			Timeout: 3 * time.Second,
 			AllowedUpdates: []string{
 				"message",
-				"edited_message",
-				"channel_post",
-				"edited_channel_post",
-				"message_reaction",
-				"message_reaction_count",
 				"inline_query",
 				"chosen_inline_result",
 				"callback_query",
-				"shipping_query",
-				"pre_checkout_query",
-				"poll",
-				"poll_answer",
-				"my_chat_member",
-				"chat_member",
-				"chat_join_request",
-				"chat_boost",
-				"removed_chat_boost",
 			},
 		},
 	}
