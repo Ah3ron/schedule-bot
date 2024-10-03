@@ -255,6 +255,12 @@ func Start(dbConn *pg.DB) {
 
 func scrapeAndUpdate(dbConn *pg.DB) error {
 	c := colly.NewCollector()
+
+	c.OnRequest(func(r *colly.Request) {
+		r.Headers.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.121 Safari/537.36")
+		r.Headers.Set("Referer", "https://www.polessu.by")
+	})
+
 	var groups []string
 	var latestUpdate time.Time
 	var mu sync.Mutex
