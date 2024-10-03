@@ -89,7 +89,6 @@ func parseScheduleForGroup(group string) {
 		"https://www.polessu.by/ruz/term2/?q=&f=2",
 	}
 
-	var mu sync.Mutex
 	count := 0
 
 	for _, link := range links {
@@ -97,9 +96,7 @@ func parseScheduleForGroup(group string) {
 
 		c := colly.NewCollector()
 
-		mu.Lock()
 		weekStartDates := parseWeekStartDates(link)
-		mu.Unlock()
 
 		c.OnHTML("tbody#weeks-filter", func(e *colly.HTMLElement) {
 			currentDay := ""
