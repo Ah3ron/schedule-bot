@@ -231,6 +231,7 @@ func parseWeekStartDates(link string) map[string]time.Time {
 		weekStartDates[weekID] = startDate
 	})
 
+	c.AllowURLRevisit = true
 	err := visitWithRetry(c, link, 3, 2*time.Second)
 	if err != nil {
 		fmt.Println(err)
