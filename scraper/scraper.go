@@ -261,6 +261,8 @@ func scrapeAndUpdate(dbConn *pg.DB) error {
 		r.Headers.Set("Referer", "https://www.polessu.by")
 	})
 
+	c.SetRequestTimeout(10 * time.Second)
+
 	var groups []string
 	var latestUpdate time.Time
 	var mu sync.Mutex

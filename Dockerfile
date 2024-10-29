@@ -11,4 +11,4 @@ RUN cp /usr/share/zoneinfo/$TZ /etc/localtime && \
     echo $TZ > /etc/timezone
 WORKDIR /root/
 COPY --from=builder /app/schedule-bot .
-CMD ["./schedule-bot"]
+ENTRYPOINT ["./schedule-bot"]
