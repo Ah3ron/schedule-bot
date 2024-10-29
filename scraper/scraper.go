@@ -231,13 +231,26 @@ func parseWeekStartDates(link string) map[string]time.Time {
 		weekStartDates[weekID] = startDate
 	})
 
-	if err := c.Visit(link); err != nil {
-		fmt.Printf("Failed to visit link %s: %v\n", link, err)
+	err := visitWithRetry(c, link, 3, 2*time.Second)
+	if err != nil {
+		fmt.Println(err)
 	}
 
 	wg.Wait()
 
 	return weekStartDates
+}
+
+func visitWithRetry(c *colly.Collector, link string, maxRetries int, delay time.Duration) error {
+	for i := 0; i < maxRetries; i++ {
+		if err := c.Visit(link); err != nil {
+			fmt.Printf("Failed to visit link %s: %v. Retrying in %v...\n", link, err, delay)
+			time.Sleep(delay)
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("failed to visit link %s after %d attempts", link, maxRetries)
 }
 
 func Start(dbConn *pg.DB) {
