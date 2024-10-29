@@ -95,6 +95,7 @@ func parseScheduleForGroup(group string) {
 		link = link + "&q=" + group
 
 		c := colly.NewCollector()
+		c.SetRequestTimeout(60 * time.Second)
 
 		weekStartDates := parseWeekStartDates(link)
 
@@ -203,6 +204,7 @@ func calculateDayOfWeek(day string) int {
 
 func parseWeekStartDates(link string) map[string]time.Time {
 	c := colly.NewCollector()
+	c.SetRequestTimeout(60 * time.Second)
 
 	weekStartDates := make(map[string]time.Time)
 	var wg sync.WaitGroup
@@ -255,13 +257,7 @@ func Start(dbConn *pg.DB) {
 
 func scrapeAndUpdate(dbConn *pg.DB) error {
 	c := colly.NewCollector()
-
-	c.OnRequest(func(r *colly.Request) {
-		r.Headers.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.121 Safari/537.36")
-		r.Headers.Set("Referer", "https://www.polessu.by")
-	})
-
-	c.SetRequestTimeout(10 * time.Second)
+	c.SetRequestTimeout(60 * time.Second)
 
 	var groups []string
 	var latestUpdate time.Time
