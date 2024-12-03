@@ -316,23 +316,24 @@ func parseDate(dateStr string) (time.Time, string, error) {
 }
 
 func formatSchedule(schedules []db.Schedule, todayTime time.Time) string {
+	var text strings.Builder
 	todayStr := todayTime.Format("02.01")
-	text := fmt.Sprintf("Ваше расписание (%s, %s)\n", schedules[0].DayOfWeek, todayStr)
+	text.WriteString(fmt.Sprintf("Ваше расписание (%s, %s)\n", schedules[0].DayOfWeek, todayStr))
 
 	for _, schedule := range schedules {
-		text += fmt.Sprintf("\n*Время:* _%s_\n*Пара:* _%s_", schedule.LessonTime, schedule.LessonName)
+		text.WriteString(fmt.Sprintf("\n*Время:* _%s_\n*Пара:* _%s_", schedule.LessonTime, schedule.LessonName))
 		if schedule.Location != "" {
-			text += fmt.Sprintf("\n*Аудит.:* _%s_", schedule.Location)
+			text.WriteString(fmt.Sprintf("\n*Аудит.:* _%s_", schedule.Location))
 		}
 		if schedule.Teacher != "" {
-			text += fmt.Sprintf("\n*Препод.:* _%s_", schedule.Teacher)
+			text.WriteString(fmt.Sprintf("\n*Препод.:* _%s_", schedule.Teacher))
 		}
 		if schedule.Subgroup != "" {
-			text += fmt.Sprintf("\n*Подгруппа:* _%s_", schedule.Subgroup)
+			text.WriteString(fmt.Sprintf("\n*Подгруппа:* _%s_", schedule.Subgroup))
 		}
-		text += "\n"
+		text.WriteString("\n")
 	}
-	return text
+	return text.String()
 }
 
 func handleWeekButton(c telebot.Context, dbConn *pg.DB) error {
