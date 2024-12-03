@@ -12,9 +12,6 @@ import (
 	"github.com/gocolly/colly"
 )
 
-var allSchedules []db.Schedule
-var mu sync.Mutex
-
 func fetchLastUpdateDateFromDB(dbConn *pg.DB) (time.Time, error) {
 	var lastUpdate time.Time
 	err := dbConn.Model((*db.Metadata)(nil)).ColumnExpr("MAX(last_update)").Select(&lastUpdate)
@@ -79,7 +76,7 @@ func fetchGroups(content string) ([]string, error) {
 	return groups, nil
 }
 
-func parseScheduleForGroup(group string) {
+func parseScheduleForGroup(group string, schedChan chan<- db.Schedule) {
 	fmt.Printf("Parsing schedule for group: %s\n", group)
 
 	links := []string{
@@ -149,9 +146,7 @@ func parseScheduleForGroup(group string) {
 					}
 					count++
 
-					mu.Lock()
-					allSchedules = append(allSchedules, schedule)
-					mu.Unlock()
+					schedChan <- schedule
 				}
 			})
 		})
@@ -164,8 +159,8 @@ func parseScheduleForGroup(group string) {
 	fmt.Printf("Total schedules collected from group %s: %d\n", group, count)
 }
 
-func saveSchedulesToDB(dbConn *pg.DB, lastUpdate time.Time) error {
-	if len(allSchedules) == 0 {
+func saveSchedulesToDB(dbConn *pg.DB, schedules []db.Schedule, lastUpdate time.Time) error {
+	if len(schedules) == 0 {
 		fmt.Println("No schedules to save to the database.")
 		return nil
 	}
@@ -174,7 +169,7 @@ func saveSchedulesToDB(dbConn *pg.DB, lastUpdate time.Time) error {
 		return fmt.Errorf("failed to delete schedules from database: %w", err)
 	}
 
-	if _, err := dbConn.Model(&allSchedules).Insert(); err != nil {
+	if _, err := dbConn.Model(&schedules).Insert(); err != nil {
 		return fmt.Errorf("failed to save schedules to database: %w", err)
 	}
 
@@ -347,23 +342,34 @@ func updateDatabaseIfNeeded(dbConn *pg.DB, latestUpdate time.Time, groups []stri
 	fmt.Println("Latest date from web: ", latestUpdate)
 
 	if latestUpdate.After(lastUpdateDateFromDB) {
+		schedChan := make(chan db.Schedule, 1000)
+		var schedules []db.Schedule
+
 		var wg sync.WaitGroup
+		done := make(chan bool)
+
+		go func() {
+			for schedule := range schedChan {
+				schedules = append(schedules, schedule)
+			}
+			done <- true
+		}()
+
 		for _, group := range groups {
 			wg.Add(1)
 			go func(g string) {
 				defer wg.Done()
-				parseScheduleForGroup(g)
+				parseScheduleForGroup(g, schedChan)
 			}(group)
 		}
-		wg.Wait()
 
-		if err := saveSchedulesToDB(dbConn, latestUpdate); err != nil {
+		wg.Wait()
+		close(schedChan)
+		<-done
+
+		if err := saveSchedulesToDB(dbConn, schedules, latestUpdate); err != nil {
 			return fmt.Errorf("failed to save schedules to database: %w", err)
 		}
-
-		mu.Lock()
-		allSchedules = []db.Schedule{}
-		mu.Unlock()
 
 		fmt.Println("Schedules saved to database.")
 	}
