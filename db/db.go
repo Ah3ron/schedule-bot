@@ -53,18 +53,20 @@ func createSchema(db *pg.DB) error {
 	}
 
 	for _, model := range models {
-		err := db.Model(model).CreateTable(&orm.CreateTableOptions{
-			IfNotExists: true,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to create table for %T: %w", model, err)
+		if err := db.Model(model).CreateTable(&orm.CreateTableOptions{Temp: false, IfNotExists: true}); err != nil {
+			return fmt.Errorf("failed to create table for model %T: %w", model, err)
 		}
 	}
 
-	var metadata Metadata
-	if err := db.Model(&metadata).Select(); err != nil {
-		metadata = Metadata{LastUpdate: time.Unix(0, 0).UTC()}
-		if _, err := db.Model(&metadata).Insert(); err != nil {
+	var count int
+	_, err := db.QueryOne(pg.Scan(&count), `SELECT COUNT(*) FROM metadata`)
+	if err != nil {
+		return fmt.Errorf("failed to query metadata count: %w", err)
+	}
+
+	if count == 0 {
+		initialMetadata := &Metadata{LastUpdate: time.Unix(0, 0).UTC()}
+		if _, err := db.Model(initialMetadata).Insert(); err != nil {
 			return fmt.Errorf("failed to insert initial metadata: %w", err)
 		}
 	}
