@@ -12,56 +12,55 @@ import (
 	"github.com/gocolly/colly"
 )
 
+var (
+	dateRegex  = regexp.MustCompile(`(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})`)
+	groupRegex = regexp.MustCompile(`var query = \['(.*?)'\]`)
+)
+
 func fetchLastUpdateDateFromDB(dbConn *pg.DB) (time.Time, error) {
 	var lastUpdate time.Time
 	err := dbConn.Model((*db.Metadata)(nil)).ColumnExpr("MAX(last_update)").Select(&lastUpdate)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("failed to fetch last update date from database: %w", err)
+		return time.Time{}, fmt.Errorf("failed to fetch last update date: %w", err)
 	}
 	return lastUpdate, nil
 }
 
 func fetchLastUpdateDateFromWeb(content string) (time.Time, error) {
-	re := regexp.MustCompile(`(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})`)
-	matches := re.FindStringSubmatch(content)
-
-	if len(matches) <= 0 {
-		return time.Time{}, fmt.Errorf("failed to parse date from content")
+	matches := dateRegex.FindStringSubmatch(content)
+	if len(matches) == 0 {
+		return time.Time{}, fmt.Errorf("no date found in content")
 	}
 
-	dateString := fmt.Sprintf("%s-%s-%s %s:%s", matches[3], matches[2], matches[1], matches[4], matches[5])
-	layout := "2006-01-02 15:04"
-	parsedTime, err := time.Parse(layout, dateString)
+	dateStr := fmt.Sprintf("%s-%s-%s %s:%s", matches[3], matches[2], matches[1], matches[4], matches[5])
+	parsedTime, err := time.Parse("2006-01-02 15:04", dateStr)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("failed to parse time: %w", err)
+		return time.Time{}, fmt.Errorf("failed to parse date: %w", err)
 	}
 
 	return parsedTime, nil
 }
 
 func fetchGroups(content string) ([]string, error) {
-	re := regexp.MustCompile(`var query = \['(.*?)'\]`)
-	matches := re.FindStringSubmatch(content)
-
-	if len(matches) <= 1 {
-		return nil, fmt.Errorf("no matches found for groups")
+	matches := groupRegex.FindStringSubmatch(content)
+	if len(matches) < 2 {
+		return nil, fmt.Errorf("no groups found in content")
 	}
 
-	arrayElements := strings.Split(strings.TrimSpace(matches[1]), `','`)
-	var groups []string
-
-	re = regexp.MustCompile(`^\d{2}[а-яА-Я]+-\d+[а-я]*$`)
-	for _, element := range arrayElements {
-		if re.MatchString(element) {
-			groups = append(groups, strings.Trim(element, " "))
+	groups := strings.Split(strings.TrimSpace(matches[1]), `','`)
+	var validGroups []string
+	for _, group := range groups {
+		group = strings.Trim(group, "'")
+		if regexp.MustCompile(`^\d{2}[а-яА-Я]+-\d+[а-я]*$`).MatchString(group) {
+			validGroups = append(validGroups, group)
 		}
 	}
 
-	return groups, nil
+	return validGroups, nil
 }
 
-func parseScheduleForGroup(group string, schedChan chan<- db.Schedule) {
-	fmt.Printf("Parsing schedule for group: %s\n", group)
+func parseScheduleForGroup(group string, schedChan chan<- db.Schedule, wg *sync.WaitGroup) {
+	defer wg.Done()
 
 	links := []string{
 		"https://www.polessu.by/ruz/?q=&f=1",
@@ -70,94 +69,74 @@ func parseScheduleForGroup(group string, schedChan chan<- db.Schedule) {
 		"https://www.polessu.by/ruz/term2/?q=&f=2",
 	}
 
-	var wg sync.WaitGroup
 	for _, link := range links {
-		wg.Add(1)
-		go func(link string) {
-			defer wg.Done()
-			link = link + "&q=" + group
-			c := colly.NewCollector()
-			c.SetRequestTimeout(60 * time.Second)
+		c := colly.NewCollector()
+		c.SetRequestTimeout(60 * time.Second)
 
-			weekStartDates := parseWeekStartDates(link)
+		weekStartDates := parseWeekStartDates(link)
 
-			c.OnHTML("tbody#weeks-filter", func(e *colly.HTMLElement) {
-				currentDay := ""
-				e.ForEach("tr", func(_ int, el *colly.HTMLElement) {
-					if el.DOM.HasClass("wa") {
-						currentDay = el.ChildText("th:first-of-type")
-						return
+		c.OnHTML("tbody#weeks-filter", func(e *colly.HTMLElement) {
+			currentDay := ""
+			e.ForEach("tr", func(_ int, el *colly.HTMLElement) {
+				if el.DOM.HasClass("wa") {
+					currentDay = el.ChildText("th:first-of-type")
+					return
+				}
+
+				weekClass := el.Attr("class")
+				matches := regexp.MustCompile(`w\d+`).FindAllString(weekClass, -1)
+				if len(matches) == 0 {
+					return
+				}
+
+				timeRange := el.ChildText("td:nth-child(1)")
+				subjectInfo := regexp.MustCompile(`\([\d\s,-]+\)\s?`).ReplaceAllString(el.ChildText("td:nth-child(2)"), "")
+				room := el.ChildText("td:nth-child(3)")
+				teacher := el.ChildText("td:nth-child(4)")
+				subgroup := el.ChildText("td:nth-child(5) span")
+
+				for _, weekNumber := range matches {
+					startDate, ok := weekStartDates[weekNumber]
+					if !ok {
+						continue
 					}
 
-					weekClass := el.Attr("class")
-					re := regexp.MustCompile(`w\d+`)
-					matches := re.FindAllString(weekClass, -1)
-
-					if len(matches) < 1 {
-						return
+					classDate := startDate.AddDate(0, 0, calculateDayOfWeek(currentDay)-1)
+					schedChan <- db.Schedule{
+						GroupName:  group,
+						LessonDate: classDate.Format("02.01"),
+						DayOfWeek:  currentDay,
+						LessonTime: timeRange,
+						LessonName: subjectInfo,
+						Location:   room,
+						Teacher:    teacher,
+						Subgroup:   subgroup,
 					}
-
-					timeRange := el.ChildText("td:nth-child(1)")
-					subjectInfo := el.ChildText("td:nth-child(2)")
-					room := el.ChildText("td:nth-child(3)")
-					teacher := el.ChildText("td:nth-child(4)")
-					subgroup := el.ChildText("td:nth-child(5) span")
-
-					reSubjectInfo := regexp.MustCompile(`\([\d\s,-]+\)\s?`)
-					subjectInfo = reSubjectInfo.ReplaceAllString(subjectInfo, "")
-
-					dayOfWeek := calculateDayOfWeek(currentDay)
-
-					for _, weekNumber := range matches {
-						startDate, ok := weekStartDates[weekNumber]
-						if !ok {
-							fmt.Printf("No start date for week: %s\n", weekNumber)
-							continue
-						}
-
-						classDate := startDate.AddDate(0, 0, dayOfWeek-1)
-
-						schedule := db.Schedule{
-							GroupName:  group,
-							LessonDate: classDate.Format("02.01"),
-							DayOfWeek:  currentDay,
-							LessonTime: timeRange,
-							LessonName: subjectInfo,
-							Location:   room,
-							Teacher:    teacher,
-							Subgroup:   subgroup,
-						}
-
-						schedChan <- schedule
-					}
-				})
+				}
 			})
+		})
 
-			if err := c.Visit(link); err != nil {
-				fmt.Printf("Failed to visit link %s: %v\n", link, err)
-			}
-		}(link)
+		if err := c.Visit(link + "&q=" + group); err != nil {
+			fmt.Printf("Failed to visit link %s: %v\n", link, err)
+		}
 	}
-
-	wg.Wait()
 }
 
 func saveSchedulesToDB(dbConn *pg.DB, schedules []db.Schedule, lastUpdate time.Time) error {
 	if len(schedules) == 0 {
-		fmt.Println("No schedules to save to the database.")
 		return nil
 	}
 
 	if _, err := dbConn.Model((*db.Schedule)(nil)).Where("TRUE").Delete(); err != nil {
-		return fmt.Errorf("failed to delete schedules from database: %w", err)
+		return fmt.Errorf("failed to delete schedules: %w", err)
 	}
 
 	if _, err := dbConn.Model(&schedules).Insert(); err != nil {
-		return fmt.Errorf("failed to save schedules to database: %w", err)
+		return fmt.Errorf("failed to insert schedules: %w", err)
 	}
 
 	if _, err := dbConn.Model(&db.Metadata{LastUpdate: lastUpdate}).Insert(); err != nil {
-		return fmt.Errorf("failed to save metadata to database: %w", err)
+		return fmt.Errorf("failed to update metadata: %w", err)
 	}
 
 	return nil
@@ -173,7 +152,6 @@ func calculateDayOfWeek(day string) int {
 		"Суббота":     6,
 		"Воскресенье": 7,
 	}
-
 	return dayMap[day]
 }
 
@@ -193,11 +171,8 @@ func parseWeekStartDates(link string) map[string]time.Time {
 			return
 		}
 
-		re := regexp.MustCompile(`\d{2}\.\d{2}`)
-		match := re.FindString(e.Text)
-
-		startDateStr := match + fmt.Sprintf(".%d", time.Now().Year())
-		startDate, err := time.Parse("02.01.2006", startDateStr)
+		dateStr := regexp.MustCompile(`\d{2}\.\d{2}`).FindString(e.Text) + fmt.Sprintf(".%d", time.Now().Year())
+		startDate, err := time.Parse("02.01.2006", dateStr)
 		if err != nil {
 			fmt.Printf("Error parsing date for week %s: %v\n", weekID, err)
 			return
@@ -207,39 +182,21 @@ func parseWeekStartDates(link string) map[string]time.Time {
 	})
 
 	c.AllowURLRevisit = true
-	err := visitWithRetry(c, link, 5, 2*time.Second)
-	if err != nil {
-		fmt.Println(err)
+	if err := c.Visit(link); err != nil {
+		fmt.Printf("Failed to visit link %s: %v\n", link, err)
 	}
 
 	wg.Wait()
-
 	return weekStartDates
 }
 
-func visitWithRetry(c *colly.Collector, link string, maxRetries int, delay time.Duration) error {
-	for i := 0; i < maxRetries; i++ {
-		if err := c.Visit(link); err != nil {
-			fmt.Printf("Failed to visit link %s: %v. Retrying in %v...\n", link, err, delay)
-			time.Sleep(delay)
-			continue
-		}
-		return nil
-	}
-	return fmt.Errorf("failed to visit link %s after %d attempts", link, maxRetries)
-}
-
 func Start(dbConn *pg.DB) {
-	if err := scrapeAndUpdate(dbConn); err != nil {
-		fmt.Printf("Error during initial scraping and updating: %v\n", err)
-	}
-
 	ticker := time.NewTicker(30 * time.Minute)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		if err := scrapeAndUpdate(dbConn); err != nil {
-			fmt.Printf("Error during scraping and updating: %v\n", err)
+			fmt.Printf("Error during scraping: %v\n", err)
 		}
 	}
 }
@@ -255,8 +212,32 @@ func scrapeAndUpdate(dbConn *pg.DB) error {
 
 	c.OnHTML("html", func(e *colly.HTMLElement) {
 		defer wg.Done()
-		if err := processHTML(e, &latestUpdate, &groups, &mu); err != nil {
-			fmt.Printf("Error processing HTML: %v\n", err)
+
+		content, err := e.DOM.Html()
+		if err != nil {
+			fmt.Printf("Failed to get HTML content: %v\n", err)
+			return
+		}
+
+		lastUpdateDateFromWeb, err := fetchLastUpdateDateFromWeb(content)
+		if err != nil {
+			fmt.Printf("Failed to fetch last update date: %v\n", err)
+			return
+		}
+
+		mu.Lock()
+		if lastUpdateDateFromWeb.After(latestUpdate) {
+			latestUpdate = lastUpdateDateFromWeb
+		}
+		mu.Unlock()
+
+		if e.Request.URL.String() == "https://www.polessu.by/ruz/?q=&f=1" {
+			fetchedGroups, err := fetchGroups(content)
+			if err != nil {
+				fmt.Printf("Failed to fetch groups: %v\n", err)
+				return
+			}
+			groups = fetchedGroups
 		}
 	})
 
@@ -273,53 +254,20 @@ func scrapeAndUpdate(dbConn *pg.DB) error {
 
 	for _, link := range links {
 		wg.Add(1)
-		fmt.Printf("Visiting link: %s\n", link)
-		if err := c.Visit(link); err != nil {
-			fmt.Printf("Failed to visit link %s: %v\n", link, err)
-		}
+		go func(link string) {
+			defer wg.Done()
+			if err := c.Visit(link); err != nil {
+				fmt.Printf("Failed to visit link %s: %v\n", link, err)
+			}
+		}(link)
 	}
 
 	wg.Wait()
 
-	return updateDatabaseIfNeeded(dbConn, latestUpdate, groups)
-}
-
-func processHTML(e *colly.HTMLElement, latestUpdate *time.Time, groups *[]string, mu *sync.Mutex) error {
-	mainPageContent, err := e.DOM.Html()
-	if err != nil {
-		return fmt.Errorf("failed to get HTML content: %w", err)
-	}
-
-	lastUpdateDateFromWeb, err := fetchLastUpdateDateFromWeb(mainPageContent)
-	if err != nil {
-		return fmt.Errorf("failed to fetch last update date from web: %w", err)
-	}
-
-	mu.Lock()
-	if lastUpdateDateFromWeb.After(*latestUpdate) {
-		*latestUpdate = lastUpdateDateFromWeb
-	}
-	mu.Unlock()
-
-	if e.Request.URL.String() == "https://www.polessu.by/ruz/?q=&f=1" {
-		fetchedGroups, err := fetchGroups(mainPageContent)
-		if err != nil {
-			return fmt.Errorf("failed to fetch groups: %w", err)
-		}
-		*groups = fetchedGroups
-	}
-
-	return nil
-}
-
-func updateDatabaseIfNeeded(dbConn *pg.DB, latestUpdate time.Time, groups []string) error {
 	lastUpdateDateFromDB, err := fetchLastUpdateDateFromDB(dbConn)
 	if err != nil {
-		return fmt.Errorf("failed to fetch last update date from database: %w", err)
+		return fmt.Errorf("failed to fetch last update date from DB: %w", err)
 	}
-
-	fmt.Println("Date from DB: ", lastUpdateDateFromDB)
-	fmt.Println("Latest date from web: ", latestUpdate)
 
 	if latestUpdate.After(lastUpdateDateFromDB) {
 		schedChan := make(chan db.Schedule, 1000)
@@ -337,10 +285,7 @@ func updateDatabaseIfNeeded(dbConn *pg.DB, latestUpdate time.Time, groups []stri
 
 		for _, group := range groups {
 			wg.Add(1)
-			go func(g string) {
-				defer wg.Done()
-				parseScheduleForGroup(g, schedChan)
-			}(group)
+			go parseScheduleForGroup(group, schedChan, &wg)
 		}
 
 		wg.Wait()
@@ -348,10 +293,8 @@ func updateDatabaseIfNeeded(dbConn *pg.DB, latestUpdate time.Time, groups []stri
 		<-done
 
 		if err := saveSchedulesToDB(dbConn, schedules, latestUpdate); err != nil {
-			return fmt.Errorf("failed to save schedules to database: %w", err)
+			return fmt.Errorf("failed to save schedules: %w", err)
 		}
-
-		fmt.Println("Schedules saved to database.")
 	}
 
 	return nil

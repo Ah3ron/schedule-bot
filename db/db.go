@@ -31,18 +31,6 @@ type Metadata struct {
 	LastUpdate time.Time `pg:",notnull"`
 }
 
-func (u Users) String() string {
-	return fmt.Sprintf("Users<%d %s %v>", u.TelegramID, u.GroupName, u.IsBanned)
-}
-
-func (s Schedule) String() string {
-	return fmt.Sprintf("Schedule<%d %s %s %s %s %s %s %s>", s.ID, s.GroupName, s.LessonDate, s.DayOfWeek, s.LessonTime, s.LessonName, s.Location, s.Teacher)
-}
-
-func (m Metadata) String() string {
-	return fmt.Sprintf("Metadata<%d %s>", m.ID, m.LastUpdate)
-}
-
 func InitDB(databaseURL string) (*pg.DB, error) {
 	opt, err := pg.ParseURL(databaseURL)
 	if err != nil {
@@ -65,20 +53,18 @@ func createSchema(db *pg.DB) error {
 	}
 
 	for _, model := range models {
-		if err := db.Model(model).CreateTable(&orm.CreateTableOptions{Temp: false, IfNotExists: true}); err != nil {
-			return fmt.Errorf("failed to create table for model %T: %w", model, err)
+		err := db.Model(model).CreateTable(&orm.CreateTableOptions{
+			IfNotExists: true,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create table for %T: %w", model, err)
 		}
 	}
 
-	var count int
-	_, err := db.QueryOne(pg.Scan(&count), `SELECT COUNT(*) FROM metadata`)
-	if err != nil {
-		return fmt.Errorf("failed to query metadata count: %w", err)
-	}
-
-	if count == 0 {
-		initialMetadata := &Metadata{LastUpdate: time.Unix(0, 0).UTC()}
-		if _, err := db.Model(initialMetadata).Insert(); err != nil {
+	var metadata Metadata
+	if err := db.Model(&metadata).Select(); err != nil {
+		metadata = Metadata{LastUpdate: time.Unix(0, 0).UTC()}
+		if _, err := db.Model(&metadata).Insert(); err != nil {
 			return fmt.Errorf("failed to insert initial metadata: %w", err)
 		}
 	}
