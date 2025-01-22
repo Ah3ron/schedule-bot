@@ -78,9 +78,7 @@ func createSchema(db *pg.DB) error {
 
 	if count == 0 {
 		initialMetadata := &Metadata{LastUpdate: time.Unix(0, 0).UTC()}
-
-		_, err := db.Model(initialMetadata).Insert()
-		if err != nil {
+		if _, err := db.Model(initialMetadata).Insert(); err != nil {
 			return fmt.Errorf("failed to insert initial metadata: %w", err)
 		}
 	}

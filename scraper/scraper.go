@@ -29,14 +29,7 @@ func fetchLastUpdateDateFromWeb(content string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("failed to parse date from content")
 	}
 
-	day := matches[1]
-	month := matches[2]
-	year := matches[3]
-	hour := matches[4]
-	minute := matches[5]
-
-	dateString := fmt.Sprintf("%s-%s-%s %s:%s", year, month, day, hour, minute)
-
+	dateString := fmt.Sprintf("%s-%s-%s %s:%s", matches[3], matches[2], matches[1], matches[4], matches[5])
 	layout := "2006-01-02 15:04"
 	parsedTime, err := time.Parse(layout, dateString)
 	if err != nil {
@@ -54,23 +47,14 @@ func fetchGroups(content string) ([]string, error) {
 		return nil, fmt.Errorf("no matches found for groups")
 	}
 
-	arrayString := matches[1]
-	arrayString = strings.TrimSpace(arrayString)
-
-	arrayElements := strings.Split(arrayString, `','`)
-	for i := range arrayElements {
-		arrayElements[i] = strings.Trim(arrayElements[i], "'")
-	}
-
+	arrayElements := strings.Split(strings.TrimSpace(matches[1]), `','`)
 	var groups []string
 
 	re = regexp.MustCompile(`^\d{2}[а-яА-Я]+-\d+[а-я]*$`)
-	for i := range arrayElements {
-		if !re.MatchString(arrayElements[i]) {
-			continue
+	for _, element := range arrayElements {
+		if re.MatchString(element) {
+			groups = append(groups, strings.Trim(element, " "))
 		}
-
-		groups = append(groups, strings.Trim(arrayElements[i], " "))
 	}
 
 	return groups, nil
@@ -86,77 +70,76 @@ func parseScheduleForGroup(group string, schedChan chan<- db.Schedule) {
 		"https://www.polessu.by/ruz/term2/?q=&f=2",
 	}
 
-	count := 0
-
+	var wg sync.WaitGroup
 	for _, link := range links {
-		link = link + "&q=" + group
+		wg.Add(1)
+		go func(link string) {
+			defer wg.Done()
+			link = link + "&q=" + group
+			c := colly.NewCollector()
+			c.SetRequestTimeout(60 * time.Second)
 
-		c := colly.NewCollector()
-		c.SetRequestTimeout(60 * time.Second)
+			weekStartDates := parseWeekStartDates(link)
 
-		weekStartDates := parseWeekStartDates(link)
-
-		c.OnHTML("tbody#weeks-filter", func(e *colly.HTMLElement) {
-			currentDay := ""
-
-			e.ForEach("tr", func(_ int, el *colly.HTMLElement) {
-				if el.DOM.HasClass("wa") {
-					currentDay = el.ChildText("th:first-of-type")
-					return
-				}
-
-				weekClass := el.Attr("class")
-				re := regexp.MustCompile(`w\d+`)
-				matches := re.FindAllString(weekClass, -1)
-
-				if len(matches) < 1 {
-					return
-				}
-
-				timeRange := el.ChildText("td:nth-child(1)")
-				subjectInfo := el.ChildText("td:nth-child(2)")
-				room := el.ChildText("td:nth-child(3)")
-				teacher := el.ChildText("td:nth-child(4)")
-				subgroup := el.ChildText("td:nth-child(5) span")
-
-				reSubjectInfo := regexp.MustCompile(`\([\d\s,-]+\)\s?`)
-				subjectInfo = reSubjectInfo.ReplaceAllString(subjectInfo, "")
-
-				dayOfWeek := calculateDayOfWeek(currentDay)
-
-				for _, weekNumber := range matches {
-					startDate, ok := weekStartDates[weekNumber]
-					if !ok {
-						fmt.Printf("No start date for week: %s\n", weekNumber)
-						fmt.Println(group)
-						continue
+			c.OnHTML("tbody#weeks-filter", func(e *colly.HTMLElement) {
+				currentDay := ""
+				e.ForEach("tr", func(_ int, el *colly.HTMLElement) {
+					if el.DOM.HasClass("wa") {
+						currentDay = el.ChildText("th:first-of-type")
+						return
 					}
 
-					classDate := startDate.AddDate(0, 0, dayOfWeek-1)
+					weekClass := el.Attr("class")
+					re := regexp.MustCompile(`w\d+`)
+					matches := re.FindAllString(weekClass, -1)
 
-					schedule := db.Schedule{
-						GroupName:  group,
-						LessonDate: classDate.Format("02.01"),
-						DayOfWeek:  currentDay,
-						LessonTime: timeRange,
-						LessonName: subjectInfo,
-						Location:   room,
-						Teacher:    teacher,
-						Subgroup:   subgroup,
+					if len(matches) < 1 {
+						return
 					}
-					count++
 
-					schedChan <- schedule
-				}
+					timeRange := el.ChildText("td:nth-child(1)")
+					subjectInfo := el.ChildText("td:nth-child(2)")
+					room := el.ChildText("td:nth-child(3)")
+					teacher := el.ChildText("td:nth-child(4)")
+					subgroup := el.ChildText("td:nth-child(5) span")
+
+					reSubjectInfo := regexp.MustCompile(`\([\d\s,-]+\)\s?`)
+					subjectInfo = reSubjectInfo.ReplaceAllString(subjectInfo, "")
+
+					dayOfWeek := calculateDayOfWeek(currentDay)
+
+					for _, weekNumber := range matches {
+						startDate, ok := weekStartDates[weekNumber]
+						if !ok {
+							fmt.Printf("No start date for week: %s\n", weekNumber)
+							continue
+						}
+
+						classDate := startDate.AddDate(0, 0, dayOfWeek-1)
+
+						schedule := db.Schedule{
+							GroupName:  group,
+							LessonDate: classDate.Format("02.01"),
+							DayOfWeek:  currentDay,
+							LessonTime: timeRange,
+							LessonName: subjectInfo,
+							Location:   room,
+							Teacher:    teacher,
+							Subgroup:   subgroup,
+						}
+
+						schedChan <- schedule
+					}
+				})
 			})
-		})
 
-		if err := c.Visit(link); err != nil {
-			fmt.Printf("Failed to visit link %s: %v\n", link, err)
-		}
+			if err := c.Visit(link); err != nil {
+				fmt.Printf("Failed to visit link %s: %v\n", link, err)
+			}
+		}(link)
 	}
 
-	fmt.Printf("Total schedules collected from group %s: %d\n", group, count)
+	wg.Wait()
 }
 
 func saveSchedulesToDB(dbConn *pg.DB, schedules []db.Schedule, lastUpdate time.Time) error {
@@ -176,6 +159,7 @@ func saveSchedulesToDB(dbConn *pg.DB, schedules []db.Schedule, lastUpdate time.T
 	if _, err := dbConn.Model(&db.Metadata{LastUpdate: lastUpdate}).Insert(); err != nil {
 		return fmt.Errorf("failed to save metadata to database: %w", err)
 	}
+
 	return nil
 }
 
@@ -190,11 +174,7 @@ func calculateDayOfWeek(day string) int {
 		"Воскресенье": 7,
 	}
 
-	if val, exists := dayMap[day]; exists {
-		return val
-	}
-
-	return 0
+	return dayMap[day]
 }
 
 func parseWeekStartDates(link string) map[string]time.Time {
